@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"regexp"
 	"sync"
 
 	"go.uber.org/zap"
@@ -11,7 +12,6 @@ import (
 )
 
 var (
-	// Default color palette for multiplexing service logs
 	ansiColors = []string{
 		"\033[36m", // Cyan
 		"\033[32m", // Green
@@ -24,23 +24,35 @@ var (
 	}
 	ansiReset = "\033[0m"
 	ansiBold  = "\033[1m"
+
+	ansiStripRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 )
 
-// LogMultiplexer assigns consistent prefixes and colors to different service streams.
+// LogMultiplexer assigns consistent prefixes and colors to different service streams
+// and broadcasts lines to both terminal output (with colors) and file log (clean plain text).
 type LogMultiplexer struct {
 	mu           sync.Mutex
 	colorMap     map[string]string
 	colorIndex   int
 	maxPrefixLen int
-	writer       io.Writer
+	termWriter   io.Writer
+	fileWriter   io.Writer
 }
 
 // NewLogMultiplexer creates a new multiplexer for streaming child process outputs.
-func NewLogMultiplexer(out io.Writer) *LogMultiplexer {
+func NewLogMultiplexer(termOut io.Writer, fileOut io.Writer) *LogMultiplexer {
 	return &LogMultiplexer{
-		colorMap: make(map[string]string),
-		writer:   out,
+		colorMap:   make(map[string]string),
+		termWriter: termOut,
+		fileWriter: fileOut,
 	}
+}
+
+// SetTermWriter allows updating or detaching the terminal writer (e.g. on background detach).
+func (lm *LogMultiplexer) SetTermWriter(w io.Writer) {
+	lm.mu.Lock()
+	defer lm.mu.Unlock()
+	lm.termWriter = w
 }
 
 // GetColor returns a color string for the given service name.
@@ -79,7 +91,6 @@ type serviceLogWriter struct {
 }
 
 func (w *serviceLogWriter) Write(p []byte) (n int, err error) {
-	// Synchronize writes through multiplexer mutex to prevent garbled lines
 	w.multiplexer.mu.Lock()
 	defer w.multiplexer.mu.Unlock()
 
@@ -88,16 +99,22 @@ func (w *serviceLogWriter) Write(p []byte) (n int, err error) {
 		pad = fmt.Sprintf("%*s", diff, "")
 	}
 
-	prefix := fmt.Sprintf("%s%s[%s]%s%s ", ansiBold, w.color, w.serviceName, ansiReset, pad)
+	coloredPrefix := fmt.Sprintf("%s%s[%s]%s%s ", ansiBold, w.color, w.serviceName, ansiReset, pad)
+	plainPrefix := fmt.Sprintf("[%s]%s ", w.serviceName, pad)
 
 	scanner := bufio.NewScanner(bufio.NewReader(io.MultiReader(
-		// Create a reader from the byte slice
 		&sliceReader{p: p},
 	)))
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		fmt.Fprintf(w.multiplexer.writer, "%s%s\n", prefix, line)
+		if w.multiplexer.termWriter != nil {
+			fmt.Fprintf(w.multiplexer.termWriter, "%s%s\n", coloredPrefix, line)
+		}
+		if w.multiplexer.fileWriter != nil {
+			cleanLine := ansiStripRegex.ReplaceAllString(line, "")
+			fmt.Fprintf(w.multiplexer.fileWriter, "%s%s\n", plainPrefix, cleanLine)
+		}
 	}
 
 	return len(p), scanner.Err()
@@ -117,11 +134,11 @@ func (r *sliceReader) Read(buf []byte) (int, error) {
 	return n, nil
 }
 
-// NewZapLogger creates an initialized Zap logger based on verbose flag.
-func NewZapLogger(verbose bool) (*zap.Logger, error) {
+// NewZapLogger creates an initialized Zap logger based on verbose/debug flag.
+func NewZapLogger(debug bool) (*zap.Logger, error) {
 	cfg := zap.NewDevelopmentConfig()
 	cfg.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
-	if !verbose {
+	if !debug {
 		cfg.Level = zap.NewAtomicLevelAt(zapcore.InfoLevel)
 	} else {
 		cfg.Level = zap.NewAtomicLevelAt(zapcore.DebugLevel)

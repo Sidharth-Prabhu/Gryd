@@ -8,8 +8,9 @@ import (
 )
 
 var (
-	configFile string
-	verbose    bool
+	configFile  string
+	debug       bool
+	showVersion bool
 
 	rootCmd = &cobra.Command{
 		Use:   "gryd [command]",
@@ -19,6 +20,13 @@ manage, and launch entire multi-service development environments using a
 single terminal command.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if showVersion {
+				fmt.Println(FormatVersion())
+				return nil
+			}
+			return cmd.Help()
+		},
 	}
 )
 
@@ -33,10 +41,19 @@ func Execute() error {
 
 func init() {
 	rootCmd.PersistentFlags().StringVarP(&configFile, "config", "c", "", "Path to configuration file (default is ./gryd.yaml)")
-	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose/debug logging output")
+	rootCmd.PersistentFlags().BoolVarP(&debug, "debug", "d", false, "Enable verbose/debug logging output")
+
+	// Version flags on root command: --version and -v / --v
+	rootCmd.Flags().BoolVarP(&showVersion, "version", "", false, "Print version and release information")
+	rootCmd.Flags().BoolVarP(&showVersion, "v", "v", false, "Print version and release information")
 
 	// Register subcommands
 	rootCmd.AddCommand(runCmd)
+	rootCmd.AddCommand(reloadCmd)
+	rootCmd.AddCommand(stopCmd)
+	rootCmd.AddCommand(statusCmd)
+	rootCmd.AddCommand(lookCmd)
 	rootCmd.AddCommand(listCmd)
 	rootCmd.AddCommand(initCmd)
+	rootCmd.AddCommand(versionCmd)
 }

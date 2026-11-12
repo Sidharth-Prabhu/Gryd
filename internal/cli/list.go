@@ -6,14 +6,27 @@ import (
 	"path/filepath"
 
 	"github.com/loom-cli/gryd/internal/config"
+	"github.com/loom-cli/gryd/internal/state"
 	"github.com/spf13/cobra"
 )
 
 var listCmd = &cobra.Command{
 	Use:   "list",
-	Short: "List configured projects and their status",
-	Long:  `Scan known Gryd project directories and display configured projects.`,
+	Short: "List configured and active projects",
+	Long:  `Scan known Gryd project directories and display configured and running projects.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Active projects first
+		running, _ := state.ListRunningProjects()
+		if len(running) > 0 {
+			fmt.Println("\033[1;32mActive Background Projects:\033[0m")
+			for _, st := range running {
+				fmt.Printf("  • \033[1m%s\033[0m (running since %s, %d services)\n",
+					st.ProjectName, st.StartedAt.Format("15:04:05"), len(st.Processes))
+				fmt.Printf("      Logs: %s (view with: gryd look %s)\n", st.LogFilePath, st.ProjectName)
+			}
+			fmt.Println()
+		}
+
 		fmt.Println("Configured Gryd Projects:")
 		found := false
 
@@ -52,7 +65,7 @@ var listCmd = &cobra.Command{
 			}
 		}
 
-		if !found {
+		if !found && len(running) == 0 {
 			fmt.Println("  No Gryd configurations found in current directory or ~/.config/gryd/")
 		}
 

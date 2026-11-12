@@ -24,7 +24,7 @@ directories or uses the local directory.`,
 			projectName = args[0]
 		}
 
-		zapLog, err := logger.NewZapLogger(verbose)
+		zapLog, err := logger.NewZapLogger(debug)
 		if err != nil {
 			return fmt.Errorf("failed to initialize logger: %w", err)
 		}
@@ -43,7 +43,11 @@ directories or uses the local directory.`,
 			return fmt.Errorf("configuration error: %w", err)
 		}
 
-		appRunner := runner.New(cfg, zapLog)
+		appRunner, err := runner.New(cfg, zapLog)
+		if err != nil {
+			return fmt.Errorf("failed to initialize runner: %w", err)
+		}
+
 		return appRunner.Run(context.Background())
 	},
 }

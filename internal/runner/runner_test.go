@@ -30,25 +30,26 @@ func TestRunnerGracefulShutdown(t *testing.T) {
 	}
 
 	logger, _ := zap.NewDevelopment()
-	r := New(cfg, logger)
+	r, err := New(cfg, logger)
+	if err != nil {
+		t.Fatalf("failed to create runner: %v", err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
 	start := time.Now()
-	err := r.Run(ctx)
+	err = r.Run(ctx)
 	elapsed := time.Since(start)
 
 	if err != nil {
 		t.Fatalf("runner returned unexpected error: %v", err)
 	}
 
-	// Should have cancelled after ~500ms and terminated cleanly before 10s
 	if elapsed > 3*time.Second {
 		t.Errorf("expected shutdown to finish within 3s, took %v", elapsed)
 	}
 
-	// Verify that child processes are no longer alive
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for name, proc := range r.processes {

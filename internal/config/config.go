@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/loom-cli/gryd/internal/state"
 	"gopkg.in/yaml.v3"
 )
 
@@ -59,6 +60,9 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 
+	// Register this project automatically into global registry
+	_ = state.RegisterProject(cfg.Name, cfg.ConfigPath, cfg.WorkingDirectory)
+
 	return &cfg, nil
 }
 
@@ -104,7 +108,16 @@ func (c *Config) ValidateAndResolve() error {
 	return nil
 }
 
-// FindConfigFile attempts to locate the appropriate config file based on project name or path.
+// FindProjectConfig discovers a config file:
+// 1. If explicit specifiedPath is provided, use it.
+// 2. If projectName is provided:
+//    - Look in direct path/directory.
+//    - Look in active runtime state (~/.gryd/run/<projectName>.json).
+//    - Look in global project registry (~/.gryd/projects.json).
+//    - Look in ~/.config/gryd/<projectName>.yaml or ~/.config/loom/.
+// 3. If projectName is empty:
+//    - Search current directory or walk up parent directories (like git repository root)
+//      for gryd.yaml, gryd.yml, loom.yaml, loom.yml.
 func FindConfigFile(specifiedPath string, projectName string) (string, error) {
 	if specifiedPath != "" {
 		resolved, err := resolveFilePath(specifiedPath)
@@ -117,16 +130,16 @@ func FindConfigFile(specifiedPath string, projectName string) (string, error) {
 		return resolved, nil
 	}
 
-	// If projectName is provided and looks like a path or file
+	// If projectName is provided
 	if projectName != "" {
-		// 1. Check if projectName is a direct path to a file
+		// 1. Direct path to a file
 		if strings.HasSuffix(projectName, ".yaml") || strings.HasSuffix(projectName, ".yml") {
 			if _, err := os.Stat(projectName); err == nil {
 				return resolveFilePath(projectName)
 			}
 		}
 
-		// 2. Check if projectName is a directory containing gryd.yaml or loom.yaml
+		// 2. Direct directory containing config
 		for _, fname := range []string{"gryd.yaml", "gryd.yml", "loom.yaml", "loom.yml"} {
 			dirCfg := filepath.Join(projectName, fname)
 			if _, err := os.Stat(dirCfg); err == nil {
@@ -134,25 +147,69 @@ func FindConfigFile(specifiedPath string, projectName string) (string, error) {
 			}
 		}
 
-		// 3. Check user config directory ~/.config/gryd/<projectName>.yaml or ~/.config/loom/
+		// 3. Check active state (~/.gryd/run/<projectName>.json)
+		if st, err := state.LoadState(projectName); err == nil && st.ConfigPath != "" {
+			if _, err := os.Stat(st.ConfigPath); err == nil {
+				return st.ConfigPath, nil
+			}
+		}
+
+		// 4. Check global project registry (~/.gryd/projects.json)
+		if entry, ok := state.FindProjectInRegistry(projectName); ok && entry.ConfigPath != "" {
+			if _, err := os.Stat(entry.ConfigPath); err == nil {
+				return entry.ConfigPath, nil
+			}
+		}
+
+		// 5. Check user config directory ~/.config/gryd/<projectName>.yaml or ~/.config/loom/
 		if home, err := os.UserHomeDir(); err == nil {
 			for _, dirName := range []string{"gryd", "loom"} {
 				userConfig := filepath.Join(home, ".config", dirName, projectName+".yaml")
 				if _, err := os.Stat(userConfig); err == nil {
 					return userConfig, nil
 				}
+				userConfigYml := filepath.Join(home, ".config", dirName, projectName+".yml")
+				if _, err := os.Stat(userConfigYml); err == nil {
+					return userConfigYml, nil
+				}
 			}
 		}
+
+		return "", fmt.Errorf("project '%s' was not found (not found locally, in active projects, or in registry)", projectName)
 	}
 
-	// Default to local ./gryd.yaml, ./gryd.yml, or fallback to ./loom.yaml
-	for _, candidate := range []string{"gryd.yaml", "gryd.yml", "loom.yaml", "loom.yml"} {
-		if _, err := os.Stat(candidate); err == nil {
-			return resolveFilePath(candidate)
+	// If no projectName is provided, walk up from current working directory to find project root config
+	cwd, err := os.Getwd()
+	if err == nil {
+		currentDir := cwd
+		for {
+			for _, candidate := range []string{"gryd.yaml", "gryd.yml", "loom.yaml", "loom.yml"} {
+				candPath := filepath.Join(currentDir, candidate)
+				if _, err := os.Stat(candPath); err == nil {
+					return resolveFilePath(candPath)
+				}
+			}
+			parent := filepath.Dir(currentDir)
+			if parent == currentDir || parent == "" {
+				break
+			}
+			currentDir = parent
 		}
 	}
 
-	return "", errors.New("no gryd.yaml (or loom.yaml) found in current directory or search paths. Use --config or run 'gryd init'")
+	return "", errors.New("no gryd.yaml found in current or parent directories. Specify project name e.g. 'gryd run <project>' or run 'gryd init'")
+}
+
+// DetectCurrentProject attempts to detect the project in current directory or active state.
+func DetectCurrentProject() (string, error) {
+	configPath, err := FindConfigFile("", "")
+	if err == nil {
+		cfg, err := Load(configPath)
+		if err == nil {
+			return cfg.Name, nil
+		}
+	}
+	return "", errors.New("no active project detected in current directory")
 }
 
 // resolveFilePath expands ~ home directory and cleans the path.
