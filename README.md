@@ -17,8 +17,17 @@ Eliminate the chaos of opening half a dozen terminal tabs just to run `npm run d
 - [Command Reference](#-command-reference)
   - [`gryd init`](#gryd-init-name)
   - [`gryd run`](#gryd-run-project)
+  - [`gryd service run`](#gryd-service-run-service1-service2)
+  - [`gryd test`](#gryd-test-project)
   - [`gryd look`](#gryd-look-project)
   - [`gryd status`](#gryd-status-project)
+  - [`gryd ports`](#gryd-ports)
+  - [`gryd vc --status`](#gryd-vc---status)
+  - [`gryd vc branches`](#gryd-vc-branches)
+  - [`gryd vc remote`](#gryd-vc-remote)
+  - [`gryd vc commit`](#gryd-vc-commit)
+  - [`gryd vc push`](#gryd-vc-push)
+  - [`gryd vc merge`](#gryd-vc-merge-source_branch-base_branch)
   - [`gryd reload`](#gryd-reload-project)
   - [`gryd stop`](#gryd-stop-project)
   - [`gryd list`](#gryd-list)
@@ -175,12 +184,27 @@ settings:
 
 ## 📖 Command Reference
 
-### `gryd init [name]`
+### `gryd init [name] [--wizard]`
 Generates a starter `gryd.yaml` configuration in the current working directory.
+Use `--wizard` (or `-w`) to launch an interactive step-by-step terminal wizard:
+
+* Prompts for **Project Name** and **Working Directory** (defaults to current directory name and `.`).
+* Prompts for **Health Checks** and **Auto-Restart on Failure** settings.
+* Iteratively prompts for each service:
+  - **Service Identifier** (e.g. `backend`, `frontend`, `worker`).
+  - **Subdirectory** (relative or absolute).
+  - **Command to Execute** (`npm run dev`, `uv run api`, `go run .`).
+  - **Port** (optional).
+  - **Dependencies (`depends_on`)** with auto-suggested configured services.
+  - **Custom Environment Variables** (`KEY=val,PORT=8000`).
+* Asks whether to add another service, previews the generated layout in a styled card, and writes out a clean `gryd.yaml`.
 
 ```bash
+# Interactive step-by-step wizard
+gryd init --wizard
+
+# Quick default template
 gryd init
-# or specify a project name
 gryd init MyPlatform
 ```
 
@@ -188,6 +212,16 @@ gryd init MyPlatform
 
 ### `gryd run [project]`
 Starts all services defined in the configuration concurrently.
+By default in an interactive terminal, launches the responsive full-screen TUI dashboard:
+* **Header Bar**: Live project name, status badge, active service count, and stack uptime.
+* **Left Sidebar**: Real-time service status indicators (`●:port` for running, `✖` for stopped) with keyboard navigation (`↑`/`↓` or `Tab`).
+* **Main Log Pane**: Dedicated live-streaming log viewer for the selected service or all combined services, with full viewport scrolling (`PgUp`/`PgDown`, `u`/`d`, `g`/`G`).
+* **Hot Keybindings**:
+  - `r`: Hot reload all project services on the fly.
+  - `c`: Detach to background and keep services running.
+  - `q` / `Ctrl+C`: Gracefully stop all services, kill process groups, and release listening ports.
+
+*(Note: When redirected to a pipe or run in non-interactive CI environments, `gryd run` automatically falls back to raw multiplexed stdout streaming).*
 
 ```bash
 # Inside a project directory
@@ -203,6 +237,61 @@ gryd run --config /path/to/custom.yaml
 **Flags:**
 - `-c, --config string`: Path to specific configuration file.
 - `-d, --debug`: Enable verbose debug logging.
+
+---
+
+### `gryd service run <service1> [service2...]`
+Starts only the specified subset of services from your project configuration without booting the entire environment.
+
+```bash
+# Run a single service
+gryd service run worker
+
+# Run multiple specific services together
+gryd service run worker frontend
+
+# Target a project from outside its directory
+gryd service run worker frontend --project Campora
+```
+
+All interactive live-stream controls (`r` to reload selected services, `c` to run in background, `Ctrl+C` to quit) remain fully functional.
+
+---
+
+### `gryd test [project]`
+Executes a pre-flight test boot of all project services. Monitors them until their configured ports are listening and background tasks initialize stably, then terminates all child processes cleanly and releases the ports.
+
+Returns an exit code of `0` on success and `1` on boot failure or timeout.
+
+```bash
+# Inside a project directory
+gryd test
+
+# From any directory
+gryd test Campora
+
+# Custom readiness timeout
+gryd test --timeout 30s
+```
+
+**Sample Output:**
+```text
+[gryd test] Starting test run for project 'MockApp' (timeout: 25s)...
+Working directory: /Users/developer/Projects/MockApp
+
+  ✓ Service 'web' listening on port 9911 (252ms)
+  ✓ Service 'worker' started and running stably (2.002s)
+
+✓ All 2 services for 'MockApp' booted successfully!
+All child processes have been cleanly terminated and ports released.
+
+  SERVICE          STATUS     PORT     BOOT TIME    COMMAND
+  ────────────────────────────────────────────────────────────────────
+  web              Passed     9911     252ms        python3 -m http.server 9911
+  worker           Passed     -        2.002s       sleep 5
+
+✓ Project 'MockApp' is verified and ready to run with: gryd run
+```
 
 ---
 
@@ -249,6 +338,198 @@ Uptime:           18m24s (started 12:00:15)
 
 View live logs with: gryd look Campora
 ```
+
+---
+
+### `gryd ports`
+Scans all active and configured Gryd projects and presents a neat, structured overview of allocated ports, listening states, and the exact operating system processes/PIDs bound to them.
+
+```bash
+gryd ports
+```
+
+**Sample Output:**
+```text
+Gryd Port Allocations
+────────────────────────────────────────────────────────────────────
+
+  PORT     PROJECT          SERVICE        STATUS                   PIDS         PROCESS
+  ────────────────────────────────────────────────────────────────────────────────────────
+  3000     cleo             frontend       Active (Listening)       88926        next-server (v16)
+  8000     cleo             backend        Active (Listening)       88889        uvicorn
+  8100     cleo             mcp            Active (Listening)       88890        python
+
+  Run gryd stop <project> to terminate a project and release its ports.
+```
+
+---
+
+### `gryd vc --status` (or `gryd vc status`)
+Checks the version control environment: validates whether Git is installed on the system, checks configured global credentials (`user.name`, `user.email`), verifies GitHub CLI authentication status (`gh auth status`), and displays active repository and branch details if inside a Git repo.
+
+```bash
+gryd vc --status
+# or
+gryd vc status
+```
+
+**Sample Output:**
+```text
+Version Control System Status
+──────────────────────────────────────────────────
+
+  ✓ Git Installed:       git version 2.53.0
+  ✓ User Identity:       Sidharth Prabhu <mail@sidharthprabhu.co.in>
+  ✓ GitHub CLI (gh):     Logged in as Sidharth-Prabhu
+
+  Current Repository:
+    • Branch: main
+    • Remote: https://github.com/Sidharth-Prabhu/Gryd.git
+```
+
+If Git is not installed, Gryd displays an informative error message with direct platform installation instructions.
+
+> **Note:** `gryd vc` commands require an initialized Gryd project (a `gryd.yaml` configuration in the directory tree). If Gryd has not been initialized, running `gryd vc` will prompt you to run `gryd init` first.
+
+---
+
+### `gryd vc branches`
+Lists all local and remote tracking branches in the current repository, highlighting the active branch (`HEAD`) in green with commit hashes and tracking messages.
+
+```bash
+gryd vc branches
+```
+
+**Sample Output:**
+```text
+Git Branches
+──────────────────────────────────────────────────
+
+* main (HEAD)                         49cf8ed [origin/main] Features added
+  remotes/origin/main                 49cf8ed Features added
+```
+
+---
+
+### `gryd vc remote`
+Displays all configured remote URLs for the repository (both fetch and push). If no remote is configured yet, Gryd interactively prompts you to add one:
+
+```bash
+gryd vc remote
+```
+
+**Interactive Prompt (When no remote is set):**
+```text
+No remote repository configured. Would you like to add one? (y/n): y
+Enter remote repository URL (e.g. https://github.com/user/repo.git): https://github.com/example/my-project.git
+
+✓ Successfully added remote 'origin': https://github.com/example/my-project.git
+You can now push using: git push -u origin <branch>
+```
+
+---
+
+### `gryd vc commit`
+Presents an interactive branch selector (with arrow-key navigation or direct typing to create a new branch), stages all repository changes (`git add -A`), and commits with your message.
+
+```bash
+gryd vc commit
+# or with inline message
+gryd vc commit -m "Add new authentication flow"
+```
+
+**Interactive Branch Selection:**
+```text
+Select a target Git branch:
+Use ↑/↓ arrows to select, type to create a new branch, Enter to confirm
+
+❯ main (current)
+  dev
+  + Create new branch...
+```
+
+---
+
+### `gryd vc push`
+Pushes to a selected remote repository on your chosen branch.
+1. Prompts you to pick an existing branch or type a new one to switch/create.
+2. If uncommitted changes exist, prompts to commit them first.
+3. Presents an interactive arrow-key selector to choose the remote repository before pushing.
+
+```bash
+gryd vc push
+```
+
+**Interactive Remote Selector:**
+```text
+Select a remote repository to push to:
+Use ↑/↓ arrow keys to navigate, Enter to select, q/Ctrl+C to cancel
+
+❯ origin         (https://github.com/Sidharth-Prabhu/Gryd.git)
+  backup         (git@gitlab.com:sidharth/backup.git)
+```
+
+#### Smart Branch Conflict Resolution
+If switching branches would overwrite uncommitted local changes, Gryd halts and presents an interactive resolution menu with explanations of each choice:
+
+```text
+⚠ Uncommitted local changes would be overwritten by switching to 'main'.
+How would you like to resolve this?
+Use ↑/↓ arrow keys to choose an action, Enter to confirm, Esc to abort
+
+❯ 1. Stash changes, switch branch, and re-apply (Recommended)
+    Shelves your uncommitted work into git stash, switches to 'main', and automatically pops/restores your changes there.
+
+  2. Commit changes on current branch first
+    Prompts for a commit message and commits your uncommitted work to current branch before switching to 'main'.
+
+  3. Stash changes and switch (Keep stash saved)
+    Safely saves your uncommitted changes into git stash and switches to 'main', leaving the working tree completely clean.
+
+  4. Force switch and discard uncommitted changes
+    Permanently discards conflicting uncommitted local changes and forces checkout of 'main'. (Warning: Changes will be lost).
+
+  5. Cancel / Abort
+    Cancels the operation and stays on your current branch without modifying anything.
+```
+
+---
+
+### `gryd vc merge [source_branch] [base_branch]`
+Merges a feature or source branch into a target base branch (e.g. `main` or `development`).
+If branch arguments are omitted, Gryd interactively prompts you to choose the source branch and destination base branch using arrow keys.
+
+```bash
+# Fully interactive branch selection
+gryd vc merge
+
+# Merge a specific branch into the current branch
+gryd vc merge feature/login
+
+# Explicitly specify source and base branch
+gryd vc merge feature/login main
+
+# Flags:
+# --no-ff: Create a merge commit even if fast-forward is possible
+# --squash: Squash commits into working tree without committing immediately
+gryd vc merge feature/login main --no-ff
+```
+
+**Sample Output:**
+```text
+[gryd vc] Switching to base branch 'main'...
+[gryd vc] Merging 'feature/login' into 'main'...
+
+Updating 0eb22ed..4afc70b
+Fast-forward
+ login.txt | 1 +
+ 1 file changed, 1 insertion(+)
+
+✓ Successfully merged 'feature/login' into 'main'!
+You can now push the updated base branch using: gryd vc push
+```
+
+If merge conflicts occur, Gryd clearly lists the conflicted files and provides immediate guidance on resolving them.
 
 ---
 

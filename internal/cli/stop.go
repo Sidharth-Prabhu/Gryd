@@ -2,11 +2,16 @@ package cli
 
 import (
 	"fmt"
+	"os"
+	"strings"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/loom-cli/gryd/internal/config"
 	"github.com/loom-cli/gryd/internal/runner"
 	"github.com/loom-cli/gryd/internal/state"
+	"github.com/loom-cli/gryd/internal/tui"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var stopCmd = &cobra.Command{
@@ -21,12 +26,10 @@ If inside a project directory, [project] can be omitted.`,
 		if len(args) > 0 {
 			projectName = args[0]
 		} else {
-			// Auto-detect project if inside project directory
 			detected, err := config.DetectCurrentProject()
 			if err == nil {
 				projectName = detected
 			} else {
-				// If only one project is currently running, default to it
 				running, _ := state.ListRunningProjects()
 				if len(running) == 1 {
 					projectName = running[0].ProjectName
@@ -54,7 +57,6 @@ If inside a project directory, [project] can be omitted.`,
 
 		stoppedCount := 0
 		if st != nil {
-			// Terminate all recorded process groups
 			for _, proc := range st.Processes {
 				if proc.PID > 0 && state.IsProcessAlive(proc.PID) {
 					stoppedCount++
@@ -81,16 +83,40 @@ If inside a project directory, [project] can be omitted.`,
 			}
 		}
 
-		fmt.Println()
-		fmt.Printf("\033[1;32m✓ Successfully stopped project '%s'.\033[0m\n", projectName)
+		termW := 80
+		if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w > 40 {
+			termW = w
+		}
+
+		title := tui.BadgeProject.Render(" " + projectName + " ")
+		statusBadge := tui.BadgeSuccess.Render(" STOPPED ")
+		spacer := termW - lipgloss.Width(title) - lipgloss.Width(statusBadge) - 6
+		if spacer < 1 {
+			spacer = 1
+		}
+		topBar := lipgloss.JoinHorizontal(lipgloss.Center, title, strings.Repeat(" ", spacer), statusBadge)
+
+		var summaryLines []string
+		summaryLines = append(summaryLines, fmt.Sprintf("  \033[1;32m✓\033[0m Successfully terminated all processes for '%s'.", projectName))
 		if stoppedCount > 0 {
-			fmt.Printf("  • Terminated %d running service processes.\n", stoppedCount)
+			summaryLines = append(summaryLines, fmt.Sprintf("  • Terminated %d running service processes.", stoppedCount))
 		}
 		if len(freedPorts) > 0 {
-			fmt.Printf("  • Released and confirmed ports: %v\n", freedPorts)
-		} else if cfg != nil {
-			fmt.Println("  • All project ports verified free.")
+			summaryLines = append(summaryLines, fmt.Sprintf("  • Released and confirmed freed ports: %v", freedPorts))
+		} else {
+			summaryLines = append(summaryLines, "  • All project ports verified released and free.")
 		}
+
+		box := tui.BoxCard.Width(termW - 2).Render(
+			lipgloss.JoinVertical(lipgloss.Left,
+				topBar,
+				"",
+				strings.Join(summaryLines, "\n"),
+			),
+		)
+
+		fmt.Println()
+		fmt.Println(box)
 		fmt.Println()
 
 		return nil

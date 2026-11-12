@@ -1,0 +1,19 @@
+name: gryd
+working_directory: .
+
+services:
+  cli-build:
+    directory: .
+    command: go build -o bin/gryd ./cmd/gryd
+    env:
+      CGO_ENABLED: "0"
+
+  cli-test:
+    directory: .
+    command: go test -v ./...
+    depends_on:
+      - cli-build
+
+settings:
+  health_check: false
+  restart_on_failure: false

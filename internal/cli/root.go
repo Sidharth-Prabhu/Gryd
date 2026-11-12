@@ -49,9 +49,13 @@ func init() {
 
 	// Register subcommands
 	rootCmd.AddCommand(runCmd)
+	rootCmd.AddCommand(serviceCmd)
+	rootCmd.AddCommand(testCmd)
 	rootCmd.AddCommand(reloadCmd)
 	rootCmd.AddCommand(stopCmd)
 	rootCmd.AddCommand(statusCmd)
+	rootCmd.AddCommand(portsCmd)
+	rootCmd.AddCommand(vcCmd)
 	rootCmd.AddCommand(lookCmd)
 	rootCmd.AddCommand(listCmd)
 	rootCmd.AddCommand(initCmd)
