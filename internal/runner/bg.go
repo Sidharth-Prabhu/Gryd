@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,7 +14,8 @@ import (
 	"github.com/loom-cli/gryd/internal/state"
 )
 
-// StopProjectProcesses kills all running processes associated with a project state.
+// StopProjectProcesses kills all running processes associated with a project state,
+// and terminates any containerized sidecars.
 func StopProjectProcesses(st *state.ProjectState) {
 	for name, proc := range st.Processes {
 		if proc.PID > 0 && state.IsProcessAlive(proc.PID) {
@@ -31,6 +33,15 @@ func StopProjectProcesses(st *state.ProjectState) {
 		if proc.PID > 0 && state.IsProcessAlive(proc.PID) {
 			_ = syscall.Kill(-proc.PID, syscall.SIGKILL)
 			_ = syscall.Kill(proc.PID, syscall.SIGKILL)
+		}
+	}
+
+	// Clean up sidecars if project config is accessible
+	if st != nil && st.ConfigPath != "" {
+		if cfg, err := config.Load(st.ConfigPath); err == nil && len(cfg.Dependencies) > 0 {
+			sm := NewSidecarManager(cfg.Name, cfg.Dependencies, nil)
+			sm.runtime, _ = DetectContainerRuntime()
+			sm.StopAll()
 		}
 	}
 }
@@ -69,6 +80,12 @@ func ReloadBackgroundProject(projectName string) (*state.ProjectState, error) {
 		if svc.Port > 0 && IsPortInUse(svc.Port) {
 			_, _ = FreePort(svc.Port)
 		}
+	}
+
+	// 3b. Start sidecars if defined
+	if len(cfg.Dependencies) > 0 {
+		sm := NewSidecarManager(cfg.Name, cfg.Dependencies, nil)
+		_ = sm.StartAll(context.Background())
 	}
 
 	// 4. Open log file

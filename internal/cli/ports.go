@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/loom-cli/gryd/internal/config"
@@ -97,6 +98,26 @@ of assigned ports, listening status, and process IDs.`,
 				}
 
 				entries = append(entries, entry)
+			}
+
+			// Include declared dependency ports
+			for depName, dep := range cfg.Dependencies {
+				for _, portMap := range dep.Ports {
+					hostPort := strings.Split(portMap, ":")[0]
+					if p, err := strconv.Atoi(hostPort); err == nil && p > 0 {
+						entry := portEntry{
+							Port:        p,
+							ProjectName: projName,
+							ServiceName: depName + " (sidecar)",
+							Status:      "Inactive",
+							ProcessName: dep.Image,
+						}
+						if runner.IsPortInUse(p) {
+							entry.Status = "Active (Listening)"
+						}
+						entries = append(entries, entry)
+					}
+				}
 			}
 		}
 

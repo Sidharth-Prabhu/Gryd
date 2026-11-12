@@ -88,8 +88,21 @@ func TestRunWithHooks(ctx context.Context, cfg *config.Config, timeout time.Dura
 				_, _ = FreePort(svc.Port)
 			}
 		}
+		if len(cfg.Dependencies) > 0 {
+			sm := NewSidecarManager(cfg.Name, cfg.Dependencies, nil)
+			sm.runtime, _ = DetectContainerRuntime()
+			sm.StopAll()
+		}
 	}
 	defer shutdown()
+
+	// Start sidecar dependencies if configured
+	if len(cfg.Dependencies) > 0 {
+		sm := NewSidecarManager(cfg.Name, cfg.Dependencies, nil)
+		if err := sm.StartAll(testCtx); err != nil {
+			return nil, fmt.Errorf("failed to start dependency sidecars: %w", err)
+		}
+	}
 
 	// Launch each service
 	results := make(map[string]*ServiceTestResult)

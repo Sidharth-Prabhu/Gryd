@@ -26,12 +26,22 @@ type Settings struct {
 	RestartOnFailure bool `yaml:"restart_on_failure"`
 }
 
+// Dependency defines configuration for an external infrastructure sidecar (e.g., PostgreSQL, Redis).
+type Dependency struct {
+	Image   string            `yaml:"image"`
+	Ports   []string          `yaml:"ports,omitempty"`
+	Env     map[string]string `yaml:"env,omitempty"`
+	Volumes []string          `yaml:"volumes,omitempty"`
+	Command string            `yaml:"command,omitempty"`
+}
+
 // Config represents the complete gryd.yaml (or legacy loom.yaml) configuration file.
 type Config struct {
-	Name             string             `yaml:"name"`
-	WorkingDirectory string             `yaml:"working_directory"`
-	Services         map[string]Service `yaml:"services"`
-	Settings         Settings           `yaml:"settings"`
+	Name             string                `yaml:"name"`
+	WorkingDirectory string                `yaml:"working_directory"`
+	Services         map[string]Service    `yaml:"services"`
+	Dependencies     map[string]Dependency `yaml:"dependencies,omitempty"`
+	Settings         Settings              `yaml:"settings"`
 
 	// ConfigPath is the absolute path to the file this config was loaded from.
 	ConfigPath string `yaml:"-"`
@@ -99,9 +109,18 @@ func (c *Config) ValidateAndResolve() error {
 			if dep == name {
 				return fmt.Errorf("service '%s' cannot depend on itself", name)
 			}
-			if _, exists := c.Services[dep]; !exists {
-				return fmt.Errorf("service '%s' depends on unknown service '%s'", name, dep)
+			_, existsInSvc := c.Services[dep]
+			_, existsInDeps := c.Dependencies[dep]
+			if !existsInSvc && !existsInDeps {
+				return fmt.Errorf("service '%s' depends on unknown service or dependency '%s'", name, dep)
 			}
+		}
+	}
+
+	// Validate each infrastructure dependency
+	for depName, dep := range c.Dependencies {
+		if strings.TrimSpace(dep.Image) == "" {
+			return fmt.Errorf("dependency '%s' must specify an 'image'", depName)
 		}
 	}
 

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -74,6 +76,11 @@ var (
 
 	shortcutDesc = lipgloss.NewStyle().
 			Foreground(colorMuted)
+
+	highlightStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#11111B")).
+			Background(lipgloss.Color("#F9E2AF"))
 )
 
 type logMsg string
@@ -97,6 +104,14 @@ type UIModel struct {
 	mu            sync.Mutex
 	statusMessage string
 	compactMode   bool
+
+	// Search state
+	searching   bool
+	searchQuery string
+	matchCount  int
+
+	// Log level filter ("ALL", "ERROR", "WARN", "INFO")
+	levelFilter string
 }
 
 // NewUIModel creates a new responsive UIModel.
@@ -125,6 +140,7 @@ func NewUIModel(cfg *config.Config, st *state.ProjectState) (*UIModel, error) {
 		logs:         make(map[string][]string),
 		allLogs:      nil,
 		logFile:      file,
+		levelFilter:  "ALL",
 	}
 
 	m.readExistingLogs()
@@ -163,37 +179,120 @@ func (m *UIModel) appendLogLine(line string) {
 	defer m.mu.Unlock()
 
 	m.allLogs = append(m.allLogs, line)
-	if len(m.allLogs) > 3000 {
-		m.allLogs = m.allLogs[len(m.allLogs)-3000:]
+	if len(m.allLogs) > 2000 {
+		m.allLogs = m.allLogs[len(m.allLogs)-2000:]
 	}
 
-	for _, sName := range m.serviceNames[1:] {
-		if strings.HasPrefix(line, "["+sName+"]") || strings.Contains(line, "["+sName+"]") {
-			m.logs[sName] = append(m.logs[sName], line)
-			if len(m.logs[sName]) > 1500 {
-				m.logs[sName] = m.logs[sName][len(m.logs[sName])-1500:]
+	// Try extracting service tag e.g. [backend]
+	trimmed := strings.TrimSpace(line)
+	if strings.HasPrefix(trimmed, "[") {
+		endIdx := strings.Index(trimmed, "]")
+		if endIdx > 1 {
+			svcTag := trimmed[1:endIdx]
+			if _, exists := m.cfg.Services[svcTag]; exists {
+				m.logs[svcTag] = append(m.logs[svcTag], line)
+				if len(m.logs[svcTag]) > 2000 {
+					m.logs[svcTag] = m.logs[svcTag][len(m.logs[svcTag])-2000:]
+				}
 			}
-			break
 		}
 	}
+}
+
+func matchesLogLevel(line, filter string) bool {
+	if filter == "" || filter == "ALL" {
+		return true
+	}
+	upper := strings.ToUpper(line)
+	switch filter {
+	case "ERROR":
+		return strings.Contains(upper, "ERROR") || strings.Contains(upper, "ERR") || strings.Contains(upper, "FATAL") || strings.Contains(upper, "PANIC")
+	case "WARN":
+		return strings.Contains(upper, "WARN") || strings.Contains(upper, "WARNING")
+	case "INFO":
+		return strings.Contains(upper, "INFO")
+	}
+	return true
+}
+
+func highlightMatches(line, query string) string {
+	if query == "" {
+		return line
+	}
+	// Case-insensitive regex search with fallback to literal quote
+	re, err := regexp.Compile("(?i)" + query)
+	if err != nil {
+		re, err = regexp.Compile("(?i)" + regexp.QuoteMeta(query))
+		if err != nil {
+			return line
+		}
+	}
+	return re.ReplaceAllStringFunc(line, func(match string) string {
+		return highlightStyle.Render(match)
+	})
+}
+
+func lineMatchesQuery(line, query string) bool {
+	if query == "" {
+		return true
+	}
+	// First try regex match
+	if re, err := regexp.Compile("(?i)" + query); err == nil {
+		if re.MatchString(line) {
+			return true
+		}
+	}
+	// Fallback to substring match
+	return strings.Contains(strings.ToLower(line), strings.ToLower(query))
 }
 
 func (m *UIModel) updateViewportContent() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	var lines []string
+	var sourceLines []string
 	if m.selectedIdx == 0 {
-		lines = m.allLogs
+		sourceLines = m.allLogs
 	} else {
 		targetSvc := m.serviceNames[m.selectedIdx]
-		lines = m.logs[targetSvc]
+		sourceLines = m.logs[targetSvc]
 	}
 
-	if len(lines) == 0 {
-		m.viewport.SetContent("\n  \033[2mNo logs recorded yet for this service.\033[0m\n")
+	query := strings.TrimSpace(m.searchQuery)
+	var displayLines []string
+	matches := 0
+
+	for _, l := range sourceLines {
+		if !matchesLogLevel(l, m.levelFilter) {
+			continue
+		}
+
+		if query != "" {
+			if lineMatchesQuery(l, query) {
+				matches++
+				displayLines = append(displayLines, highlightMatches(l, query))
+			}
+		} else {
+			displayLines = append(displayLines, l)
+		}
+	}
+
+	if query != "" {
+		m.matchCount = matches
 	} else {
-		m.viewport.SetContent(strings.Join(lines, "\n"))
+		m.matchCount = 0
+	}
+
+	if len(displayLines) == 0 {
+		if query != "" {
+			m.viewport.SetContent(fmt.Sprintf("\n  \033[33mNo logs matching search query: '%s'\033[0m  \033[2m(Esc to clear)\033[0m\n", query))
+		} else if m.levelFilter != "ALL" {
+			m.viewport.SetContent(fmt.Sprintf("\n  \033[33mNo logs matching level filter: %s\033[0m  \033[2m(Press 'l' to cycle)\033[0m\n", m.levelFilter))
+		} else {
+			m.viewport.SetContent("\n  \033[2mNo logs recorded yet for this service.\033[0m\n")
+		}
+	} else {
+		m.viewport.SetContent(strings.Join(displayLines, "\n"))
 	}
 	m.viewport.GotoBottom()
 }
@@ -235,47 +334,40 @@ func (m *UIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 
-		// Determine if compact mode (terminal width under 85 columns)
 		m.compactMode = (msg.Width < 85)
 
-		// Responsive layout math
 		var sidebarWidth int
 		var mainWidth int
 		var contentHeight int
 
-		// Vertical heights: header(1) + footer(1) + margin gaps(3)
 		contentHeight = msg.Height - 5
 		if contentHeight < 6 {
 			contentHeight = 6
 		}
 
 		if m.compactMode {
-			// In compact mode, sidebar becomes a top tab bar or takes minimal 22 cols
 			sidebarWidth = 22
-			mainWidth = msg.Width - sidebarWidth - 5
+			mainWidth = msg.Width - sidebarWidth - 3
 		} else {
-			// Proportional sidebar: 25% of width bounded between 24 and 34
-			sidebarWidth = int(float64(msg.Width) * 0.24)
-			if sidebarWidth < 24 {
-				sidebarWidth = 24
-			} else if sidebarWidth > 34 {
-				sidebarWidth = 34
+			sidebarWidth = 28
+			if sidebarWidth > msg.Width/3 {
+				sidebarWidth = msg.Width / 3
 			}
-			mainWidth = msg.Width - sidebarWidth - 5
+			mainWidth = msg.Width - sidebarWidth - 3
 		}
 
 		if mainWidth < 20 {
 			mainWidth = 20
 		}
 
-		m.viewport.Width = mainWidth - 2 // account for borders & padding
-		m.viewport.Height = contentHeight - 2
+		m.viewport.Width = mainWidth - 4
+		m.viewport.Height = contentHeight - 4
 		m.updateViewportContent()
 
 	case logMsg:
-		chunk := string(msg)
-		if chunk != "" {
-			lines := strings.Split(chunk, "\n")
+		str := string(msg)
+		if str != "" {
+			lines := strings.Split(str, "\n")
 			for _, l := range lines {
 				if l != "" {
 					m.appendLogLine(l)
@@ -292,6 +384,41 @@ func (m *UIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.ticker())
 
 	case tea.KeyMsg:
+		// When search input mode is active
+		if m.searching {
+			switch msg.Type {
+			case tea.KeyEsc:
+				// Exit search and clear query
+				m.searching = false
+				m.searchQuery = ""
+				m.updateViewportContent()
+				return m, nil
+
+			case tea.KeyEnter:
+				// Keep current search active and resume navigation
+				m.searching = false
+				return m, nil
+
+			case tea.KeyBackspace, tea.KeyDelete:
+				if len(m.searchQuery) > 0 {
+					m.searchQuery = m.searchQuery[:len(m.searchQuery)-1]
+					m.updateViewportContent()
+				}
+				return m, nil
+
+			case tea.KeyRunes, tea.KeySpace:
+				m.searchQuery += msg.String()
+				m.updateViewportContent()
+				return m, nil
+
+			case tea.KeyCtrlC:
+				m.quitting = true
+				return m, tea.Quit
+			}
+			return m, nil
+		}
+
+		// Standard navigation mode
 		switch msg.String() {
 		case "ctrl+c", "q":
 			m.quitting = true
@@ -300,6 +427,48 @@ func (m *UIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "c":
 			m.detach = true
 			return m, tea.Quit
+
+		case "/":
+			m.searching = true
+			m.statusMessage = ""
+			return m, nil
+
+		case "m":
+			// Insert a visual timestamp marker
+			ts := time.Now().Format("15:04:05")
+			markerLine := fmt.Sprintf("\033[1;35m--- [Marker: %s] ---\033[0m", ts)
+			m.appendLogLine(markerLine)
+			m.statusMessage = fmt.Sprintf("Marker added at %s", ts)
+			m.updateViewportContent()
+			return m, nil
+
+		case "l":
+			// Cycle log level filter: ALL -> ERROR -> WARN -> INFO -> ALL
+			switch m.levelFilter {
+			case "ALL", "":
+				m.levelFilter = "ERROR"
+			case "ERROR":
+				m.levelFilter = "WARN"
+			case "WARN":
+				m.levelFilter = "INFO"
+			case "INFO":
+				m.levelFilter = "ALL"
+			default:
+				m.levelFilter = "ALL"
+			}
+			m.statusMessage = fmt.Sprintf("Log level filter: %s", m.levelFilter)
+			m.updateViewportContent()
+			return m, nil
+
+		case "esc":
+			if m.searchQuery != "" {
+				m.searchQuery = ""
+				m.updateViewportContent()
+			} else if m.levelFilter != "ALL" {
+				m.levelFilter = "ALL"
+				m.statusMessage = "Log filter reset to ALL"
+				m.updateViewportContent()
+			}
 
 		case "up", "k":
 			if m.selectedIdx > 0 {
@@ -375,54 +544,71 @@ func (m *UIModel) View() string {
 	// Count active running services
 	activeCount := 0
 	if m.projectState != nil {
-		for _, proc := range m.projectState.Processes {
-			if state.IsProcessAlive(proc.PID) {
+		for _, p := range m.projectState.Processes {
+			if p.PID > 0 && state.IsProcessAlive(p.PID) {
 				activeCount++
 			}
 		}
 	}
-	countLabel := fmt.Sprintf(" %d/%d Active ", activeCount, len(m.cfg.Services))
+	totalCount := len(m.cfg.Services)
+	countLabel := fmt.Sprintf(" %d/%d Active ", activeCount, totalCount)
+
+	headerLeft := pillProject.Render(titleLabel)
+	headerMid := pillUptime.Render(uptimeLabel)
+	headerRight := pillCount.Render(countLabel)
+
+	leftGroup := lipgloss.JoinHorizontal(lipgloss.Center, headerLeft, " ", headerMid)
+	spacerWidth := m.width - lipgloss.Width(leftGroup) - lipgloss.Width(headerRight)
+	if spacerWidth < 1 {
+		spacerWidth = 1
+	}
 
 	headerBar := lipgloss.JoinHorizontal(lipgloss.Center,
-		pillProject.Render(titleLabel),
-		" ",
-		pillUptime.Render(uptimeLabel),
-		" ",
-		pillCount.Render(countLabel),
+		leftGroup,
+		strings.Repeat(" ", spacerWidth),
+		headerRight,
 	)
 
-	// Compute available widths
-	sidebarWidth := int(float64(m.width) * 0.24)
-	if sidebarWidth < 22 {
-		sidebarWidth = 22
-	} else if sidebarWidth > 32 {
-		sidebarWidth = 32
-	}
-	mainWidth := m.width - sidebarWidth - 4
-	if mainWidth < 20 {
-		mainWidth = 20
-	}
+	// Responsive layout math
+	var sidebarWidth int
+	var mainWidth int
+	var contentHeight int
 
-	contentHeight := m.height - 5
+	contentHeight = m.height - 5
 	if contentHeight < 6 {
 		contentHeight = 6
 	}
 
-	// 2. Sidebar Rendering
+	if m.compactMode {
+		sidebarWidth = 22
+		mainWidth = m.width - sidebarWidth - 3
+	} else {
+		sidebarWidth = 28
+		if sidebarWidth > m.width/3 {
+			sidebarWidth = m.width / 3
+		}
+		mainWidth = m.width - sidebarWidth - 3
+	}
+
+	if mainWidth < 20 {
+		mainWidth = 20
+	}
+
+	// 2. Sidebar Navigation Pane
 	var sidebarItems []string
 	sidebarHeader := lipgloss.NewStyle().Bold(true).Foreground(colorPrimary).Render(" SERVICES")
 	sidebarItems = append(sidebarItems, sidebarHeader, "")
 
-	for i, name := range m.serviceNames {
+	for i, svc := range m.serviceNames {
 		statusBadge := ""
 		if i == 0 {
 			statusBadge = lipgloss.NewStyle().Foreground(colorAccent).Render("✦")
 		} else {
 			if m.projectState != nil {
-				if proc, ok := m.projectState.Processes[name]; ok && state.IsProcessAlive(proc.PID) {
+				if proc, ok := m.projectState.Processes[svc]; ok && proc.PID > 0 && state.IsProcessAlive(proc.PID) {
 					portBadge := ""
-					if svc, ok := m.cfg.Services[name]; ok && svc.Port > 0 {
-						portBadge = fmt.Sprintf(":%d", svc.Port)
+					if s, exists := m.cfg.Services[svc]; exists && s.Port > 0 {
+						portBadge = fmt.Sprintf(":%d", s.Port)
 					}
 					statusBadge = lipgloss.NewStyle().Foreground(colorSuccess).Render("●" + portBadge)
 				} else {
@@ -433,29 +619,53 @@ func (m *UIModel) View() string {
 			}
 		}
 
-		maxNameLen := sidebarWidth - 10
-		if maxNameLen < 6 {
-			maxNameLen = 6
-		}
-		displayName := name
-		if len(displayName) > maxNameLen {
-			displayName = displayName[:maxNameLen-1] + "…"
+		displayName := svc
+		maxNameLen := sidebarWidth - lipgloss.Width(statusBadge) - 7
+		if maxNameLen > 3 && len(displayName) > maxNameLen {
+			displayName = displayName[:maxNameLen-2] + "…"
 		}
 
-		// Calculate padding to right-align status badge
+		isSelected := (i == m.selectedIdx)
+		itemText := displayName
+
 		padLen := sidebarWidth - len(displayName) - lipgloss.Width(statusBadge) - 6
 		if padLen < 1 {
 			padLen = 1
 		}
-		spacer := strings.Repeat(" ", padLen)
+		rowContent := fmt.Sprintf("%s%s%s", itemText, strings.Repeat(" ", padLen), statusBadge)
 
-		rowText := fmt.Sprintf("%s%s%s", displayName, spacer, statusBadge)
-
-		if i == m.selectedIdx {
-			sidebarItems = append(sidebarItems, itemActive.Width(sidebarWidth-4).Render("❯ "+rowText))
+		if isSelected {
+			sidebarItems = append(sidebarItems, itemActive.Width(sidebarWidth-4).Render("❯ "+rowContent))
 		} else {
-			sidebarItems = append(sidebarItems, itemInactive.Width(sidebarWidth-4).Render("  "+rowText))
+			sidebarItems = append(sidebarItems, itemInactive.Width(sidebarWidth-4).Render("  "+rowContent))
 		}
+	}
+
+	// Render sidecars list if any exist
+	if len(m.cfg.Dependencies) > 0 {
+		sidebarItems = append(sidebarItems, "", lipgloss.NewStyle().Bold(true).Foreground(colorAccent).Render(" SIDECARS"))
+		for depName, dep := range m.cfg.Dependencies {
+			depBadge := lipgloss.NewStyle().Foreground(colorMuted).Render("○")
+			portInfo := ""
+			if len(dep.Ports) > 0 {
+				hostPort := strings.Split(dep.Ports[0], ":")[0]
+				portInfo = ":" + hostPort
+				if p, err := strconv.Atoi(hostPort); err == nil && runner.IsPortInUse(p) {
+					depBadge = lipgloss.NewStyle().Foreground(colorSuccess).Render("●" + portInfo)
+				} else {
+					depBadge = lipgloss.NewStyle().Foreground(colorMuted).Render("○" + portInfo)
+				}
+			}
+			padLen := sidebarWidth - len(depName) - lipgloss.Width(depBadge) - 6
+			if padLen < 1 {
+				padLen = 1
+			}
+			sidebarItems = append(sidebarItems, itemInactive.Width(sidebarWidth-4).Render(fmt.Sprintf("  %s%s%s", depName, strings.Repeat(" ", padLen), depBadge)))
+		}
+	}
+
+	for len(sidebarItems) < contentHeight-2 {
+		sidebarItems = append(sidebarItems, "")
 	}
 
 	sidebarContent := strings.Join(sidebarItems, "\n")
@@ -471,7 +681,24 @@ func (m *UIModel) View() string {
 	}
 
 	titleLeft := lipgloss.NewStyle().Bold(true).Foreground(colorPrimary).Render(fmt.Sprintf(" %s", selectedService))
-	titleRight := lipgloss.NewStyle().Foreground(colorMuted).Render(fmt.Sprintf("%d lines ", logLineCount))
+
+	var searchInfo string
+	if m.searching {
+		searchInfo = fmt.Sprintf(" \033[1;33mSearch:\033[0m %s\033[7m \033[0m (%d matches) ", m.searchQuery, m.matchCount)
+	} else if m.searchQuery != "" {
+		searchInfo = fmt.Sprintf(" \033[1;33mFiltered:\033[0m '%s' (%d matches, Esc to reset) ", m.searchQuery, m.matchCount)
+	}
+
+	levelInfo := ""
+	if m.levelFilter != "ALL" && m.levelFilter != "" {
+		levelInfo = fmt.Sprintf(" \033[1;35m[Level: %s]\033[0m ", m.levelFilter)
+	}
+
+	titleRightText := fmt.Sprintf("%d lines ", logLineCount)
+	if searchInfo != "" || levelInfo != "" {
+		titleRightText = searchInfo + levelInfo + titleRightText
+	}
+	titleRight := lipgloss.NewStyle().Foreground(colorMuted).Render(titleRightText)
 
 	titleSpacerWidth := mainWidth - lipgloss.Width(titleLeft) - lipgloss.Width(titleRight) - 4
 	if titleSpacerWidth < 1 {
@@ -487,8 +714,17 @@ func (m *UIModel) View() string {
 
 	// 4. Responsive Footer Bar
 	var footerText string
-	if m.width > 90 {
-		footerText = fmt.Sprintf("%s %s   %s %s   %s %s   %s %s   %s %s",
+	if m.searching {
+		footerText = fmt.Sprintf("%s %s   %s %s   %s %s",
+			shortcutKey.Render("Type"), shortcutDesc.Render("to search"),
+			shortcutKey.Render("Enter"), shortcutDesc.Render("confirm filter"),
+			shortcutKey.Render("Esc"), shortcutDesc.Render("cancel search"),
+		)
+	} else if m.width > 90 {
+		footerText = fmt.Sprintf("%s %s   %s %s   %s %s   %s %s   %s %s   %s %s   %s %s   %s %s",
+			shortcutKey.Render("/"), shortcutDesc.Render("search"),
+			shortcutKey.Render("l"), shortcutDesc.Render("level filter"),
+			shortcutKey.Render("m"), shortcutDesc.Render("marker"),
 			shortcutKey.Render("↑/↓/Tab"), shortcutDesc.Render("select"),
 			shortcutKey.Render("u/d"), shortcutDesc.Render("scroll"),
 			shortcutKey.Render("r"), shortcutDesc.Render("reload"),
@@ -496,7 +732,9 @@ func (m *UIModel) View() string {
 			shortcutKey.Render("q"), shortcutDesc.Render("quit"),
 		)
 	} else {
-		footerText = fmt.Sprintf("%s %s  %s %s  %s %s",
+		footerText = fmt.Sprintf("%s %s  %s %s  %s %s  %s %s  %s %s",
+			shortcutKey.Render("/"), shortcutDesc.Render("search"),
+			shortcutKey.Render("l"), shortcutDesc.Render("lvl"),
 			shortcutKey.Render("Tab"), shortcutDesc.Render("service"),
 			shortcutKey.Render("r"), shortcutDesc.Render("reload"),
 			shortcutKey.Render("q"), shortcutDesc.Render("quit"),

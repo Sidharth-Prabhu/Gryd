@@ -2,11 +2,13 @@ package tui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/loom-cli/gryd/internal/config"
+	"github.com/loom-cli/gryd/internal/runner"
 	"github.com/loom-cli/gryd/internal/state"
 )
 
@@ -143,6 +145,30 @@ func RenderStatusCard(projectName string, cfg *config.Config, st *state.ProjectS
 			cmdStr,
 		)
 		rows = append(rows, row)
+	}
+
+	// List dependencies / sidecars if defined
+	if cfg != nil && len(cfg.Dependencies) > 0 {
+		rows = append(rows, "", lipgloss.NewStyle().Bold(true).Foreground(ColorAccent).Render("  SIDECARS / DEPENDENCIES"))
+		for depName, dep := range cfg.Dependencies {
+			portStr := "-"
+			statusBadge := lipgloss.NewStyle().Foreground(ColorMuted).Render("○ Inactive")
+			if len(dep.Ports) > 0 {
+				hostPort := strings.Split(dep.Ports[0], ":")[0]
+				portStr = ":" + hostPort
+				if p, err := strconv.Atoi(hostPort); err == nil && runner.IsPortInUse(p) {
+					statusBadge = lipgloss.NewStyle().Bold(true).Foreground(ColorSuccess).Render("● Running")
+				}
+			}
+			row := fmt.Sprintf("  %-*s %-*s %-*s %-*s %s",
+				colNameW, depName,
+				colStatusW+lipgloss.Width(statusBadge)-len(lipgloss.NewStyle().Render(statusBadge)), statusBadge,
+				colPidW, "(container)",
+				colPortW, portStr,
+				dep.Image,
+			)
+			rows = append(rows, row)
+		}
 	}
 
 	cardContent := lipgloss.JoinVertical(lipgloss.Left,

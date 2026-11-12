@@ -58,6 +58,7 @@ func init() {
 	rootCmd.AddCommand(vcCmd)
 	rootCmd.AddCommand(lookCmd)
 	rootCmd.AddCommand(listCmd)
+	rootCmd.AddCommand(logsCmd)
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(versionCmd)
 }

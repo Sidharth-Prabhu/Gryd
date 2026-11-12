@@ -36,6 +36,7 @@ type Runner struct {
 	logFile     *os.File
 	logPath     string
 	processes   map[string]*ProcessState
+	sidecars    *SidecarManager
 	footerMgr   *PinnedFooterManager
 	mu          sync.Mutex
 	stopOnce    sync.Once
@@ -64,6 +65,8 @@ func New(cfg *config.Config, log *zap.Logger) (*Runner, error) {
 
 	multiplexer := logger.NewLogMultiplexer(termWriter, logFile)
 
+	sidecars := NewSidecarManager(cfg.Name, cfg.Dependencies, log)
+
 	return &Runner{
 		cfg:         cfg,
 		log:         log,
@@ -71,6 +74,7 @@ func New(cfg *config.Config, log *zap.Logger) (*Runner, error) {
 		logFile:     logFile,
 		logPath:     logPath,
 		processes:   make(map[string]*ProcessState),
+		sidecars:    sidecars,
 		footerMgr:   footerMgr,
 	}, nil
 }
@@ -224,6 +228,13 @@ func (r *Runner) startServices() error {
 		Processes:   make(map[string]state.ProcessInfo),
 	}
 
+	// Start declared infrastructure sidecars first
+	if r.sidecars != nil {
+		if err := r.sidecars.StartAll(context.Background()); err != nil {
+			r.log.Warn("Failed to start some sidecar dependencies", zap.Error(err))
+		}
+	}
+
 	for name, svc := range r.cfg.Services {
 		svcDir := r.cfg.WorkingDirectory
 		if svc.Directory != "" {
@@ -331,6 +342,10 @@ func (r *Runner) shutdownAll() {
 					_ = killProcessGroup(proc.Cmd, syscall.SIGKILL)
 				}
 			}
+		}
+
+		if r.sidecars != nil {
+			r.sidecars.StopAll()
 		}
 
 		r.processes = make(map[string]*ProcessState)
