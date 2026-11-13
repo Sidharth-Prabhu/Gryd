@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/loom-cli/gryd/internal/config"
+	"github.com/loom-cli/gryd/internal/logger"
 	"github.com/loom-cli/gryd/internal/state"
 	"github.com/spf13/cobra"
 )
@@ -84,7 +85,11 @@ Examples:
 		}
 
 		for _, l := range lines {
-			fmt.Fprintln(outWriter, l)
+			if logsOutput != "" {
+				fmt.Fprintln(outWriter, l)
+			} else {
+				fmt.Fprintln(outWriter, logger.ColorizeLogLevels(l))
+			}
 		}
 
 		if !logsFollow {
@@ -107,7 +112,11 @@ Examples:
 			}
 			line = strings.TrimRight(line, "\r\n")
 			if matchesServiceFilter(line, targetService) {
-				fmt.Fprintln(outWriter, line)
+				if logsOutput != "" {
+					fmt.Fprintln(outWriter, line)
+				} else {
+					fmt.Fprintln(outWriter, logger.ColorizeLogLevels(line))
+				}
 			}
 		}
 

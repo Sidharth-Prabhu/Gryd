@@ -9,6 +9,7 @@ import (
 
 var (
 	configFile  string
+	profileFlag string
 	debug       bool
 	showVersion bool
 
@@ -33,7 +34,7 @@ single terminal command.`,
 // Execute runs the root CLI command.
 func Execute() error {
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		fmt.Fprint(os.Stderr, FormatGrydError(err))
 		return err
 	}
 	return nil
@@ -41,6 +42,7 @@ func Execute() error {
 
 func init() {
 	rootCmd.PersistentFlags().StringVarP(&configFile, "config", "c", "", "Path to configuration file (default is ./gryd.yaml)")
+	rootCmd.PersistentFlags().StringVarP(&profileFlag, "profile", "p", "", "Target environment profile defined in gryd.yaml (e.g. minimal, full-stack)")
 	rootCmd.PersistentFlags().BoolVarP(&debug, "debug", "d", false, "Enable verbose/debug logging output")
 
 	// Version flags on root command: --version and -v / --v
@@ -52,6 +54,7 @@ func init() {
 	rootCmd.AddCommand(serviceCmd)
 	rootCmd.AddCommand(testCmd)
 	rootCmd.AddCommand(reloadCmd)
+	rootCmd.AddCommand(restartCmd)
 	rootCmd.AddCommand(stopCmd)
 	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(portsCmd)

@@ -38,6 +38,8 @@ type Runner struct {
 	processes   map[string]*ProcessState
 	sidecars    *SidecarManager
 	footerMgr   *PinnedFooterManager
+	watcher     *FileWatcher
+	ipcServer   *IPCServer
 	mu          sync.Mutex
 	stopOnce    sync.Once
 }
@@ -54,7 +56,7 @@ func New(cfg *config.Config, log *zap.Logger) (*Runner, error) {
 		return nil, fmt.Errorf("failed to open log file %s: %w", logPath, err)
 	}
 
-	footerText := "\033[1;36mPress 'r' to reload\033[0m  |  \033[1;32mPress 'c' to run in background\033[0m  |  \033[2mCtrl+C to quit\033[0m"
+	footerText := "\033[1;36m'r'\033[0m reload  |  \033[1;31m'R'\033[0m hard restart  |  \033[1;32m'c'\033[0m detach  |  \033[2mCtrl+C quit\033[0m"
 	footerMgr := NewPinnedFooterManager(int(os.Stdout.Fd()), footerText)
 
 	// Wrap stdout so any write to terminal also re-draws the pinned footer
@@ -67,7 +69,7 @@ func New(cfg *config.Config, log *zap.Logger) (*Runner, error) {
 
 	sidecars := NewSidecarManager(cfg.Name, cfg.Dependencies, log)
 
-	return &Runner{
+	r := &Runner{
 		cfg:         cfg,
 		log:         log,
 		multiplexer: multiplexer,
@@ -76,7 +78,22 @@ func New(cfg *config.Config, log *zap.Logger) (*Runner, error) {
 		processes:   make(map[string]*ProcessState),
 		sidecars:    sidecars,
 		footerMgr:   footerMgr,
-	}, nil
+	}
+
+	fw, err := NewFileWatcher(cfg, log, func(serviceName string) error {
+		return r.RestartService(serviceName)
+	})
+	if err == nil {
+		r.watcher = fw
+	}
+
+	// Initialize Unix Domain Socket IPC Server
+	if ipc, err := NewIPCServer(cfg.Name, r, log); err == nil {
+		r.ipcServer = ipc
+		r.ipcServer.Start()
+	}
+
+	return r, nil
 }
 
 type footerLogWriter struct {
@@ -100,8 +117,15 @@ func (r *Runner) Run(ctx context.Context) error {
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sigChan)
 
-	// Channel for interactive keypress events
+	defer func() {
+		if r.ipcServer != nil {
+			_ = r.ipcServer.Close()
+		}
+	}()
+
+	// Channels for interactive keypress events
 	reloadChan := make(chan struct{}, 1)
+	hardRestartChan := make(chan struct{}, 1)
 	detachChan := make(chan struct{}, 1)
 
 	// Initialize terminal scrolling region and pin footer to bottom
@@ -113,8 +137,14 @@ func (r *Runner) Run(ctx context.Context) error {
 		return err
 	}
 
+	// Start file watcher if configured
+	if r.watcher != nil {
+		_ = r.watcher.Start(ctx)
+		defer r.watcher.Close()
+	}
+
 	// Enable raw terminal mode if stdout is an interactive terminal
-	stopRaw := r.setupKeyboardListener(reloadChan, detachChan)
+	stopRaw := r.setupKeyboardListener(reloadChan, hardRestartChan, detachChan)
 	defer stopRaw()
 
 	for {
@@ -129,8 +159,20 @@ func (r *Runner) Run(ctx context.Context) error {
 
 		case <-reloadChan:
 			r.footerMgr.Reset()
-			fmt.Println("\n\033[1;33m[gryd] Reloading project services...\033[0m")
+			fmt.Println("\n\033[1;33m[gryd] Hot reloading project services...\033[0m")
 			r.restartServices()
+			r.footerMgr.Init()
+
+		case <-hardRestartChan:
+			r.footerMgr.Reset()
+			fmt.Println("\n\033[1;31m[gryd] Hard restarting all processes & ports...\033[0m")
+			r.shutdownAll()
+			for _, svc := range r.cfg.Services {
+				if svc.Port > 0 && IsPortInUse(svc.Port) {
+					_, _ = FreePort(svc.Port)
+				}
+			}
+			_ = r.startServices()
 			r.footerMgr.Init()
 
 		case <-detachChan:
@@ -151,7 +193,7 @@ func (r *Runner) Run(ctx context.Context) error {
 }
 
 // setupKeyboardListener reads single keystrokes from stdin in raw mode.
-func (r *Runner) setupKeyboardListener(reloadChan, detachChan chan struct{}) func() {
+func (r *Runner) setupKeyboardListener(reloadChan, hardRestartChan, detachChan chan struct{}) func() {
 	stdinFd := int(os.Stdin.Fd())
 	if !term.IsTerminal(stdinFd) {
 		return func() {}
@@ -184,9 +226,14 @@ func (r *Runner) setupKeyboardListener(reloadChan, detachChan chan struct{}) fun
 				}
 				b := buf[0]
 				switch b {
-				case 'r', 'R':
+				case 'r':
 					select {
 					case reloadChan <- struct{}{}:
+					default:
+					}
+				case 'R':
+					select {
+					case hardRestartChan <- struct{}{}:
 					default:
 					}
 				case 'c', 'C':
@@ -291,6 +338,82 @@ func (r *Runner) startServices() error {
 	// Persist active state to ~/.gryd/run/<project>.json
 	if err := state.SaveState(stateInfo); err != nil {
 		r.log.Warn("Failed to persist running state", zap.Error(err))
+	}
+
+	return nil
+}
+
+// RestartService cleanly terminates and restarts a single service process.
+func (r *Runner) RestartService(name string) error {
+	r.mu.Lock()
+	proc, exists := r.processes[name]
+	svc, svcExists := r.cfg.Services[name]
+	if !svcExists {
+		r.mu.Unlock()
+		return fmt.Errorf("service '%s' not configured", name)
+	}
+
+	if exists && proc.Cmd != nil && proc.Cmd.Process != nil {
+		r.log.Info("Restarting service", zap.String("service", name), zap.Int("pid", proc.Cmd.Process.Pid))
+		_ = killProcessGroup(proc.Cmd, syscall.SIGTERM)
+		time.Sleep(100 * time.Millisecond)
+		if state.IsProcessAlive(proc.Cmd.Process.Pid) {
+			_ = killProcessGroup(proc.Cmd, syscall.SIGKILL)
+		}
+	}
+	delete(r.processes, name)
+	r.mu.Unlock()
+
+	// Port release if defined
+	if svc.Port > 0 && IsPortInUse(svc.Port) {
+		_, _ = FreePort(svc.Port)
+	}
+
+	svcDir := r.cfg.WorkingDirectory
+	if svc.Directory != "" {
+		if filepath.IsAbs(svc.Directory) {
+			svcDir = svc.Directory
+		} else {
+			svcDir = filepath.Join(r.cfg.WorkingDirectory, svc.Directory)
+		}
+	}
+
+	cmd := shellCommand(svc.Command)
+	cmd.Dir = svcDir
+	cmd.Env = os.Environ()
+	for k, v := range svc.Env {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
+	}
+
+	outWriter := r.multiplexer.NewServiceWriter(name)
+	cmd.Stdout = outWriter
+	cmd.Stderr = outWriter
+
+	setProcessGroup(cmd)
+
+	if err := cmd.Start(); err != nil {
+		r.log.Error("Failed to restart service", zap.String("service", name), zap.Error(err))
+		return err
+	}
+
+	r.mu.Lock()
+	r.processes[name] = &ProcessState{
+		Name:    name,
+		Service: svc,
+		Cmd:     cmd,
+		Dir:     svcDir,
+		Started: time.Now(),
+	}
+	r.mu.Unlock()
+
+	// Update persisted project state
+	if st, err := state.LoadState(r.cfg.Name); err == nil {
+		st.Processes[name] = state.ProcessInfo{
+			Name:    name,
+			PID:     cmd.Process.Pid,
+			Command: svc.Command,
+		}
+		_ = state.SaveState(st)
 	}
 
 	return nil

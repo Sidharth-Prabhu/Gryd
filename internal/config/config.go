@@ -18,6 +18,8 @@ type Service struct {
 	Port      int               `yaml:"port,omitempty"`
 	DependsOn []string          `yaml:"depends_on,omitempty"`
 	Env       map[string]string `yaml:"env,omitempty"`
+	Watch     []string          `yaml:"watch,omitempty"`
+	Ignore    []string          `yaml:"ignore,omitempty"`
 }
 
 // Settings contains global execution options for the project.
@@ -35,13 +37,25 @@ type Dependency struct {
 	Command string            `yaml:"command,omitempty"`
 }
 
+// ProfileConfig defines customized overrides or subset of services for a named profile.
+type ProfileConfig struct {
+	Services     []string              `yaml:"services,omitempty"`     // Subset of services to run
+	Dependencies []string              `yaml:"dependencies,omitempty"` // Subset of dependencies to run
+	Env          map[string]string     `yaml:"env,omitempty"`          // Global env overrides
+	EnvFile      string                `yaml:"env_file,omitempty"`     // Path to custom .env file
+}
+
 // Config represents the complete gryd.yaml (or legacy loom.yaml) configuration file.
 type Config struct {
-	Name             string                `yaml:"name"`
-	WorkingDirectory string                `yaml:"working_directory"`
-	Services         map[string]Service    `yaml:"services"`
-	Dependencies     map[string]Dependency `yaml:"dependencies,omitempty"`
-	Settings         Settings              `yaml:"settings"`
+	Name             string                   `yaml:"name"`
+	WorkingDirectory string                   `yaml:"working_directory"`
+	Services         map[string]Service       `yaml:"services"`
+	Dependencies     map[string]Dependency    `yaml:"dependencies,omitempty"`
+	Profiles         map[string]ProfileConfig `yaml:"profiles,omitempty"`
+	Settings         Settings                 `yaml:"settings"`
+
+	// ActiveProfile is the profile applied to this configuration instance
+	ActiveProfile string `yaml:"-"`
 
 	// ConfigPath is the absolute path to the file this config was loaded from.
 	ConfigPath string `yaml:"-"`

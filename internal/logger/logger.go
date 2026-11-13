@@ -109,7 +109,8 @@ func (w *serviceLogWriter) Write(p []byte) (n int, err error) {
 	for scanner.Scan() {
 		line := scanner.Text()
 		if w.multiplexer.termWriter != nil {
-			fmt.Fprintf(w.multiplexer.termWriter, "%s%s\n", coloredPrefix, line)
+			coloredLine := ColorizeLogLevels(line)
+			fmt.Fprintf(w.multiplexer.termWriter, "%s%s\n", coloredPrefix, coloredLine)
 		}
 		if w.multiplexer.fileWriter != nil {
 			cleanLine := ansiStripRegex.ReplaceAllString(line, "")

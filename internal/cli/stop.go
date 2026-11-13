@@ -24,6 +24,38 @@ If inside a project directory, [project] can be omitted.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		var projectName string
 		if len(args) > 0 {
+			// Check if user ran `gryd stop <service>` in the current project
+			detected, err := config.DetectCurrentProject()
+			if err == nil {
+				cfgPath, err := config.FindConfigFile("", detected)
+				if err == nil {
+					cfg, err := config.Load(cfgPath)
+					if err == nil {
+						if _, isService := cfg.Services[args[0]]; isService {
+							// Delegate to single service stop
+							resp, err := runner.SendIPCCommand(detected, runner.IPCRequest{
+								Action:  "stop",
+								Service: args[0],
+							})
+							if err == nil && resp.Success {
+								fmt.Printf("\033[1;32m✓ %s\033[0m\n", resp.Output)
+								return nil
+							}
+							// Fallback to direct state stop
+							st, err := state.LoadState(detected)
+							if err == nil {
+								if proc, exists := st.Processes[args[0]]; exists && proc.PID > 0 {
+									_ = runner.StopSinglePID(proc.PID)
+									delete(st.Processes, args[0])
+									_ = state.SaveState(st)
+									fmt.Printf("\033[1;32m✓ Stopped service '%s'.\033[0m\n", args[0])
+									return nil
+								}
+							}
+						}
+					}
+				}
+			}
 			projectName = args[0]
 		} else {
 			detected, err := config.DetectCurrentProject()

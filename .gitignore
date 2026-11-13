@@ -15,6 +15,9 @@ bin/
 # Go workspace
 go.work
 
+# Documentation
+FEATURES_AND_COMMANDS.md
+
 # OS / Editor files
 .DS_Store
 .idea/

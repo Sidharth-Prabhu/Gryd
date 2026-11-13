@@ -127,6 +127,6 @@ If inside a project directory, the project is auto-detected. Use --project to sp
 }
 
 func init() {
-	serviceCmd.PersistentFlags().StringVarP(&serviceProjectFlag, "project", "p", "", "Target project name if outside project directory")
+	serviceCmd.PersistentFlags().StringVar(&serviceProjectFlag, "project", "", "Target project name if outside project directory")
 	serviceCmd.AddCommand(serviceRunCmd)
 }

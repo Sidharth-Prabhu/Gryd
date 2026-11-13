@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -16,7 +17,10 @@ import (
 	"golang.org/x/term"
 )
 
-var testTimeoutFlag time.Duration
+var (
+	testTimeoutFlag time.Duration
+	testJSONFlag    bool
+)
 
 var testCmd = &cobra.Command{
 	Use:   "test [project]",
@@ -58,9 +62,36 @@ Returns exit code 0 if all services pass, or 1 if any service fails or times out
 			return fmt.Errorf("configuration error: %w", err)
 		}
 
-		// Non-interactive fallback (e.g. CI / scripts)
-		if !term.IsTerminal(int(os.Stdout.Fd())) {
+		if err := cfg.ApplyProfile(profileFlag); err != nil {
+			return err
+		}
+
+		// Non-interactive or JSON output mode (e.g. CI / scripts)
+		if testJSONFlag || !term.IsTerminal(int(os.Stdout.Fd())) {
 			results, err := runner.TestRun(context.Background(), cfg, testTimeoutFlag)
+			if testJSONFlag {
+				type testJSONOutput struct {
+					Project string                     `json:"project"`
+					Passed  bool                       `json:"passed"`
+					Error   string                     `json:"error,omitempty"`
+					Results []runner.ServiceTestResult `json:"results"`
+				}
+				out := testJSONOutput{
+					Project: cfg.Name,
+					Passed:  err == nil,
+					Results: results,
+				}
+				if err != nil {
+					out.Error = err.Error()
+				}
+				data, _ := json.MarshalIndent(out, "", "  ")
+				fmt.Println(string(data))
+				if err != nil {
+					return err
+				}
+				return nil
+			}
+
 			if err != nil {
 				return err
 			}
@@ -137,4 +168,5 @@ func printTestResultsSummary(projectName string, results []runner.ServiceTestRes
 
 func init() {
 	testCmd.Flags().DurationVarP(&testTimeoutFlag, "timeout", "t", 25*time.Second, "Maximum time to wait for services to boot and listen")
+	testCmd.Flags().BoolVarP(&testJSONFlag, "json", "", false, "Output verification results in machine-readable JSON format")
 }

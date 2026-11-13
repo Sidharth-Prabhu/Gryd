@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -15,8 +16,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/loom-cli/gryd/internal/config"
+	"github.com/loom-cli/gryd/internal/logger"
 	"github.com/loom-cli/gryd/internal/runner"
 	"github.com/loom-cli/gryd/internal/state"
+	"github.com/loom-cli/gryd/internal/tunnel"
 )
 
 var (
@@ -85,6 +88,13 @@ var (
 
 type logMsg string
 type tickMsg time.Time
+type clearStatusMsg struct{}
+
+func clearStatusAfter(d time.Duration) tea.Cmd {
+	return tea.Tick(d, func(time.Time) tea.Msg {
+		return clearStatusMsg{}
+	})
+}
 
 // UIModel is the responsive Bubble Tea model for the interactive dashboard.
 type UIModel struct {
@@ -112,6 +122,19 @@ type UIModel struct {
 
 	// Log level filter ("ALL", "ERROR", "WARN", "INFO")
 	levelFilter string
+
+	// Background file watcher for TUI mode
+	watcher *runner.FileWatcher
+
+	// Resource Telemetry (CPU% & RAM per service)
+	telemetry   map[string]*state.ProcessTelemetry
+	inspectMode bool // toggle with 'i' or 'p'
+
+	// Active public tunnels (service -> URL)
+	tunnels map[string]string
+
+	// JSON format mode: "compact" (single-line parsed), "pretty" (expanded multiline), "raw"
+	jsonViewMode string
 }
 
 // NewUIModel creates a new responsive UIModel.
@@ -141,9 +164,22 @@ func NewUIModel(cfg *config.Config, st *state.ProjectState) (*UIModel, error) {
 		allLogs:      nil,
 		logFile:      file,
 		levelFilter:  "ALL",
+		telemetry:    make(map[string]*state.ProcessTelemetry),
+		tunnels:      make(map[string]string),
+		jsonViewMode: "compact",
 	}
 
 	m.readExistingLogs()
+
+	// Initialize file watcher in TUI mode
+	fw, err := runner.NewFileWatcher(cfg, nil, func(serviceName string) error {
+		return runner.RestartSingleService(cfg.Name, serviceName)
+	})
+	if err == nil {
+		m.watcher = fw
+		_ = fw.Start(context.Background())
+	}
+
 	return m, nil
 }
 
@@ -250,6 +286,64 @@ func (m *UIModel) updateViewportContent() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	if m.inspectMode {
+		targetSvc := m.serviceNames[m.selectedIdx]
+		if m.selectedIdx == 0 {
+			// All services overview
+			var inspectLines []string
+			inspectLines = append(inspectLines, "\033[1;36m=== SERVICE PROCESS & TELEMETRY OVERVIEW ===\033[0m\n")
+			for _, sName := range m.serviceNames[1:] {
+				telem, exists := m.telemetry[sName]
+				if exists && telem != nil {
+					inspectLines = append(inspectLines, fmt.Sprintf("\033[1;32m● %s\033[0m (PID: %d) — CPU: \033[1;33m%.1f%%\033[0m | RAM: \033[1;35m%s\033[0m | FDs: %d | Threads: %d",
+						sName, telem.PID, telem.CPUPercent, state.FormatBytes(telem.MemoryRSS), telem.NumFDs, telem.NumThreads))
+					for _, c := range telem.Children {
+						inspectLines = append(inspectLines, fmt.Sprintf("    └── \033[2mPID %d (%s):\033[0m CPU: %.1f%% | RAM: %s | Cmd: %s",
+							c.PID, c.Name, c.CPUPercent, state.FormatBytes(c.MemoryRSS), c.Command))
+					}
+				} else {
+					inspectLines = append(inspectLines, fmt.Sprintf("\033[2m○ %s — Inactive / Not Running\033[0m", sName))
+				}
+				inspectLines = append(inspectLines, "")
+			}
+			m.viewport.SetContent(strings.Join(inspectLines, "\n"))
+			return
+		}
+
+		// Single service detailed process tree inspection
+		telem, exists := m.telemetry[targetSvc]
+		if !exists || telem == nil {
+			m.viewport.SetContent(fmt.Sprintf("\n  \033[33mNo active telemetry available for '%s'\033[0m (process not running)\n  \033[2mPress 'i' or 'Esc' to return to logs.\033[0m\n", targetSvc))
+			return
+		}
+
+		var inspectLines []string
+		inspectLines = append(inspectLines, fmt.Sprintf("\033[1;36m=== PROCESS TREE & RESOURCE TELEMETRY: %s ===\033[0m\n", strings.ToUpper(targetSvc)))
+		inspectLines = append(inspectLines, fmt.Sprintf("  \033[1mRoot PID:\033[0m       %d", telem.PID))
+		inspectLines = append(inspectLines, fmt.Sprintf("  \033[1mTotal CPU:\033[0m      \033[1;33m%.1f%%\033[0m", telem.CPUPercent))
+		inspectLines = append(inspectLines, fmt.Sprintf("  \033[1mMemory (RSS):\033[0m   \033[1;35m%s\033[0m", state.FormatBytes(telem.MemoryRSS)))
+		inspectLines = append(inspectLines, fmt.Sprintf("  \033[1mFile Descr:\033[0m     %d", telem.NumFDs))
+		inspectLines = append(inspectLines, fmt.Sprintf("  \033[1mThreads:\033[0m        %d", telem.NumThreads))
+		inspectLines = append(inspectLines, "")
+
+		if len(telem.Children) > 0 {
+			inspectLines = append(inspectLines, fmt.Sprintf("\033[1;34mCHILD PROCESSES (%d):\033[0m", len(telem.Children)))
+			for _, c := range telem.Children {
+				inspectLines = append(inspectLines, fmt.Sprintf("  ├── \033[1mPID %d\033[0m [%s] — CPU: %.1f%% | RSS: %s",
+					c.PID, c.Name, c.CPUPercent, state.FormatBytes(c.MemoryRSS)))
+				if c.Command != "" {
+					inspectLines = append(inspectLines, fmt.Sprintf("  │   \033[2mCommand: %s\033[0m", c.Command))
+				}
+			}
+		} else {
+			inspectLines = append(inspectLines, "\033[2mNo active child sub-processes.\033[0m")
+		}
+
+		inspectLines = append(inspectLines, "\n\033[2mPress 'i' or 'Esc' to exit inspector and return to live log stream.\033[0m")
+		m.viewport.SetContent(strings.Join(inspectLines, "\n"))
+		return
+	}
+
 	var sourceLines []string
 	if m.selectedIdx == 0 {
 		sourceLines = m.allLogs
@@ -267,13 +361,26 @@ func (m *UIModel) updateViewportContent() {
 			continue
 		}
 
-		if query != "" {
-			if lineMatchesQuery(l, query) {
-				matches++
-				displayLines = append(displayLines, highlightMatches(l, query))
+		var formattedLine string
+		if m.jsonViewMode == "raw" {
+			formattedLine = l
+		} else if parsed, prefix, isJSON := logger.IsJSONLog(l); isJSON {
+			if m.jsonViewMode == "pretty" {
+				formattedLine = logger.FormatJSONPretty(parsed, prefix)
+			} else {
+				formattedLine = logger.FormatJSONCompact(parsed, prefix)
 			}
 		} else {
-			displayLines = append(displayLines, l)
+			formattedLine = logger.ColorizeLogLevels(l)
+		}
+
+		if query != "" {
+			if lineMatchesQuery(formattedLine, query) {
+				matches++
+				displayLines = append(displayLines, highlightMatches(formattedLine, query))
+			}
+		} else {
+			displayLines = append(displayLines, formattedLine)
 		}
 	}
 
@@ -364,6 +471,10 @@ func (m *UIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.Height = contentHeight - 4
 		m.updateViewportContent()
 
+	case clearStatusMsg:
+		m.statusMessage = ""
+		return m, nil
+
 	case logMsg:
 		str := string(msg)
 		if str != "" {
@@ -380,6 +491,19 @@ func (m *UIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		if updated, err := state.LoadState(m.cfg.Name); err == nil {
 			m.projectState = updated
+			// Update telemetry for each active process
+			for sName, proc := range m.projectState.Processes {
+				if proc.PID > 0 {
+					if telem, err := state.GetProcessTelemetry(proc.PID); err == nil {
+						m.telemetry[sName] = telem
+					} else {
+						delete(m.telemetry, sName)
+					}
+				}
+			}
+			if m.inspectMode {
+				m.updateViewportContent()
+			}
 		}
 		cmds = append(cmds, m.ticker())
 
@@ -421,6 +545,9 @@ func (m *UIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Standard navigation mode
 		switch msg.String() {
 		case "ctrl+c", "q":
+			if m.watcher != nil {
+				_ = m.watcher.Close()
+			}
 			m.quitting = true
 			return m, tea.Quit
 
@@ -431,6 +558,17 @@ func (m *UIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "/":
 			m.searching = true
 			m.statusMessage = ""
+			return m, nil
+
+		case "i", "p":
+			// Toggle process inspection view
+			m.inspectMode = !m.inspectMode
+			if m.inspectMode {
+				m.statusMessage = "Inspecting process & resource tree (press 'i' or 'Esc' to exit)"
+			} else {
+				m.statusMessage = "Returned to log stream"
+			}
+			m.updateViewportContent()
 			return m, nil
 
 		case "m":
@@ -461,7 +599,11 @@ func (m *UIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "esc":
-			if m.searchQuery != "" {
+			if m.inspectMode {
+				m.inspectMode = false
+				m.statusMessage = "Returned to log stream"
+				m.updateViewportContent()
+			} else if m.searchQuery != "" {
 				m.searchQuery = ""
 				m.updateViewportContent()
 			} else if m.levelFilter != "ALL" {
@@ -496,11 +638,72 @@ func (m *UIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.selectedIdx = (m.selectedIdx - 1 + len(m.serviceNames)) % len(m.serviceNames)
 			m.updateViewportContent()
 
+		case "J":
+			// Cycle JSON view mode: compact -> pretty -> raw -> compact
+			switch m.jsonViewMode {
+			case "compact":
+				m.jsonViewMode = "pretty"
+			case "pretty":
+				m.jsonViewMode = "raw"
+			case "raw":
+				m.jsonViewMode = "compact"
+			default:
+				m.jsonViewMode = "compact"
+			}
+			m.statusMessage = fmt.Sprintf("JSON view: %s", m.jsonViewMode)
+			m.updateViewportContent()
+			return m, clearStatusAfter(2 * time.Second)
+
+		case "t":
+			// Toggle public tunnel for selected service
+			if m.selectedIdx > 0 {
+				targetSvc := m.serviceNames[m.selectedIdx]
+				if activeURL, exists := m.tunnels[targetSvc]; exists {
+					_ = tunnel.GetGlobalManager().StopTunnel(targetSvc)
+					delete(m.tunnels, targetSvc)
+					m.statusMessage = fmt.Sprintf("Tunnel closed for '%s'", targetSvc)
+					_ = activeURL
+				} else {
+					if svc, ok := m.cfg.Services[targetSvc]; ok && svc.Port > 0 {
+						m.statusMessage = fmt.Sprintf("Starting public tunnel for '%s'...", targetSvc)
+						go func(sName string, p int) {
+							tun, err := tunnel.GetGlobalManager().StartTunnel(context.Background(), sName, p, "")
+							if err == nil && tun != nil {
+								m.mu.Lock()
+								m.tunnels[sName] = tun.PublicURL
+								m.statusMessage = fmt.Sprintf("Tunnel active: %s", tun.PublicURL)
+								m.mu.Unlock()
+							} else if err != nil {
+								m.mu.Lock()
+								m.statusMessage = fmt.Sprintf("Tunnel failed: %v", err)
+								m.mu.Unlock()
+							}
+						}(targetSvc, svc.Port)
+					} else {
+						m.statusMessage = fmt.Sprintf("Service '%s' has no port configured", targetSvc)
+					}
+				}
+				return m, clearStatusAfter(4 * time.Second)
+			}
+
 		case "r":
-			m.statusMessage = "Reloading services..."
+			m.statusMessage = "Hot reloading services..."
 			go func() {
+				_, _ = runner.HotReloadBackgroundProject(m.cfg.Name)
+			}()
+			return m, clearStatusAfter(2 * time.Second)
+
+		case "R":
+			m.statusMessage = "Hard restarting all processes & ports..."
+			go func() {
+				// Hard stop, free ports, and fresh boot
+				if st, err := state.LoadState(m.cfg.Name); err == nil && st != nil {
+					runner.StopProjectProcesses(st)
+					_ = state.RemoveState(m.cfg.Name)
+				}
 				_, _ = runner.ReloadBackgroundProject(m.cfg.Name)
 			}()
+			return m, clearStatusAfter(3 * time.Second)
 
 		case "pgup", "u":
 			m.viewport.LineUp(8)
@@ -620,7 +823,12 @@ func (m *UIModel) View() string {
 		}
 
 		displayName := svc
-		maxNameLen := sidebarWidth - lipgloss.Width(statusBadge) - 7
+		metricBadge := ""
+		if telem, ok := m.telemetry[svc]; ok && telem != nil {
+			metricBadge = fmt.Sprintf(" %s", state.FormatBytes(telem.MemoryRSS))
+		}
+
+		maxNameLen := sidebarWidth - lipgloss.Width(statusBadge) - lipgloss.Width(metricBadge) - 7
 		if maxNameLen > 3 && len(displayName) > maxNameLen {
 			displayName = displayName[:maxNameLen-2] + "…"
 		}
@@ -628,11 +836,15 @@ func (m *UIModel) View() string {
 		isSelected := (i == m.selectedIdx)
 		itemText := displayName
 
-		padLen := sidebarWidth - len(displayName) - lipgloss.Width(statusBadge) - 6
+		padLen := sidebarWidth - len(displayName) - lipgloss.Width(metricBadge) - lipgloss.Width(statusBadge) - 6
 		if padLen < 1 {
 			padLen = 1
 		}
-		rowContent := fmt.Sprintf("%s%s%s", itemText, strings.Repeat(" ", padLen), statusBadge)
+		metricStyled := ""
+		if metricBadge != "" {
+			metricStyled = lipgloss.NewStyle().Foreground(colorMuted).Render(metricBadge)
+		}
+		rowContent := fmt.Sprintf("%s%s%s%s", itemText, strings.Repeat(" ", padLen), metricStyled, statusBadge)
 
 		if isSelected {
 			sidebarItems = append(sidebarItems, itemActive.Width(sidebarWidth-4).Render("❯ "+rowContent))
@@ -694,9 +906,24 @@ func (m *UIModel) View() string {
 		levelInfo = fmt.Sprintf(" \033[1;35m[Level: %s]\033[0m ", m.levelFilter)
 	}
 
+	// Telemetry & Tunnel header badge if inspecting or active
+	var telemHeader string
+	if m.selectedIdx > 0 {
+		targetSvc := m.serviceNames[m.selectedIdx]
+		if tunURL, ok := m.tunnels[targetSvc]; ok && tunURL != "" {
+			telemHeader += fmt.Sprintf(" \033[1;32m[⚡ %s]\033[0m ", tunURL)
+		}
+		if telem, ok := m.telemetry[targetSvc]; ok && telem != nil {
+			telemHeader += fmt.Sprintf(" \033[1;33mCPU: %.1f%%\033[0m \033[1;35mRAM: %s\033[0m ",
+				telem.CPUPercent, state.FormatBytes(telem.MemoryRSS))
+		}
+	}
+
 	titleRightText := fmt.Sprintf("%d lines ", logLineCount)
-	if searchInfo != "" || levelInfo != "" {
-		titleRightText = searchInfo + levelInfo + titleRightText
+	if m.inspectMode {
+		titleRightText = "\033[1;36m[PROCESS TREE INSPECTOR]\033[0m "
+	} else if searchInfo != "" || levelInfo != "" || telemHeader != "" {
+		titleRightText = telemHeader + searchInfo + levelInfo + titleRightText
 	}
 	titleRight := lipgloss.NewStyle().Foreground(colorMuted).Render(titleRightText)
 
@@ -721,22 +948,29 @@ func (m *UIModel) View() string {
 			shortcutKey.Render("Esc"), shortcutDesc.Render("cancel search"),
 		)
 	} else if m.width > 90 {
-		footerText = fmt.Sprintf("%s %s   %s %s   %s %s   %s %s   %s %s   %s %s   %s %s   %s %s",
+		footerText = fmt.Sprintf("%s %s   %s %s   %s %s   %s %s   %s %s   %s %s   %s %s   %s %s   %s %s   %s %s   %s %s   %s %s",
 			shortcutKey.Render("/"), shortcutDesc.Render("search"),
-			shortcutKey.Render("l"), shortcutDesc.Render("level filter"),
+			shortcutKey.Render("J"), shortcutDesc.Render("json"),
+			shortcutKey.Render("t"), shortcutDesc.Render("tunnel"),
+			shortcutKey.Render("i"), shortcutDesc.Render("inspect"),
+			shortcutKey.Render("l"), shortcutDesc.Render("lvl"),
 			shortcutKey.Render("m"), shortcutDesc.Render("marker"),
 			shortcutKey.Render("↑/↓/Tab"), shortcutDesc.Render("select"),
 			shortcutKey.Render("u/d"), shortcutDesc.Render("scroll"),
 			shortcutKey.Render("r"), shortcutDesc.Render("reload"),
+			shortcutKey.Render("R"), shortcutDesc.Render("restart"),
 			shortcutKey.Render("c"), shortcutDesc.Render("detach"),
 			shortcutKey.Render("q"), shortcutDesc.Render("quit"),
 		)
 	} else {
-		footerText = fmt.Sprintf("%s %s  %s %s  %s %s  %s %s  %s %s",
+		footerText = fmt.Sprintf("%s %s  %s %s  %s %s  %s %s  %s %s  %s %s  %s %s  %s %s",
 			shortcutKey.Render("/"), shortcutDesc.Render("search"),
-			shortcutKey.Render("l"), shortcutDesc.Render("lvl"),
+			shortcutKey.Render("J"), shortcutDesc.Render("json"),
+			shortcutKey.Render("t"), shortcutDesc.Render("tunnel"),
 			shortcutKey.Render("Tab"), shortcutDesc.Render("service"),
 			shortcutKey.Render("r"), shortcutDesc.Render("reload"),
+			shortcutKey.Render("R"), shortcutDesc.Render("restart"),
+			shortcutKey.Render("c"), shortcutDesc.Render("detach"),
 			shortcutKey.Render("q"), shortcutDesc.Render("quit"),
 		)
 	}

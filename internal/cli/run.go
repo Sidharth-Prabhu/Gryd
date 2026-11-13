@@ -41,6 +41,10 @@ directories or uses the local directory.`,
 			return fmt.Errorf("configuration error: %w", err)
 		}
 
+		if err := cfg.ApplyProfile(profileFlag); err != nil {
+			return err
+		}
+
 		// If running in a non-interactive terminal or raw redirect, fallback to plain streaming runner
 		if !term.IsTerminal(int(os.Stdout.Fd())) {
 			zapLog, err := logger.NewZapLogger(debug)

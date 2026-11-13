@@ -15,11 +15,9 @@ import (
 
 var reloadCmd = &cobra.Command{
 	Use:   "reload [project]",
-	Short: "Restart/reload a project's services in the background without opening live logs",
-	Long: `Reload and restart all services for a project in the background.
-If inside a project directory, [project] can be omitted.
-This terminates running services, frees ports, re-reads the configuration,
-starts services fresh in the background, and leaves live logs untouched.`,
+	Short: "Perform a zero-downtime hot reload of a project's services",
+	Long: `Performs a hot reload on running services without stopping sidecars or destroying the session.
+If you need a hard process kill and full port teardown, use 'gryd restart'.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		var projectName string
@@ -41,11 +39,11 @@ starts services fresh in the background, and leaves live logs untouched.`,
 			}
 		}
 
-		fmt.Printf("\033[1;33m[gryd] Reloading project '%s'...\033[0m\n", projectName)
+		fmt.Printf("\033[1;33m[gryd] Hot reloading project '%s'...\033[0m\n", projectName)
 
-		newState, err := runner.ReloadBackgroundProject(projectName)
+		newState, err := runner.HotReloadBackgroundProject(projectName)
 		if err != nil {
-			return fmt.Errorf("failed to reload project '%s': %w", projectName, err)
+			return fmt.Errorf("failed to hot reload project '%s': %w", projectName, err)
 		}
 
 		termW := 80
@@ -59,7 +57,7 @@ starts services fresh in the background, and leaves live logs untouched.`,
 		}
 
 		fmt.Println()
-		header := tui.BadgeSuccess.Render(" ✓ PROJECT RELOADED SUCCESSFULLY ")
+		header := tui.BadgeSuccess.Render(" ✓ PROJECT HOT RELOADED ")
 		title := tui.BadgeProject.Render(" " + projectName + " ")
 		topBar := lipgloss.JoinHorizontal(lipgloss.Center, header, " ", title)
 
