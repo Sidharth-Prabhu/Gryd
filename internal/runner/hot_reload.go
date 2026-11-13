@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/loom-cli/gryd/internal/config"
@@ -40,9 +39,7 @@ func HotReloadBackgroundProject(projectName string) (*state.ProjectState, error)
 	for name := range cfg.Services {
 		oldProc, exists := st.Processes[name]
 		if exists && oldProc.PID > 0 && state.IsProcessAlive(oldProc.PID) {
-			// Try graceful SIGTERM first
-			_ = syscall.Kill(-oldProc.PID, syscall.SIGTERM)
-			_ = syscall.Kill(oldProc.PID, syscall.SIGTERM)
+			_ = terminatePID(oldProc.PID)
 		}
 	}
 
@@ -52,8 +49,7 @@ func HotReloadBackgroundProject(projectName string) (*state.ProjectState, error)
 	for name, svc := range cfg.Services {
 		oldProc, exists := st.Processes[name]
 		if exists && oldProc.PID > 0 && state.IsProcessAlive(oldProc.PID) {
-			_ = syscall.Kill(-oldProc.PID, syscall.SIGKILL)
-			_ = syscall.Kill(oldProc.PID, syscall.SIGKILL)
+			_ = killPID(oldProc.PID)
 		}
 
 		if svc.Port > 0 && IsPortInUse(svc.Port) {

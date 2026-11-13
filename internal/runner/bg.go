@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/loom-cli/gryd/internal/config"
@@ -19,9 +18,7 @@ import (
 func StopProjectProcesses(st *state.ProjectState) {
 	for name, proc := range st.Processes {
 		if proc.PID > 0 && state.IsProcessAlive(proc.PID) {
-			// Kill negative PID for process group
-			_ = syscall.Kill(-proc.PID, syscall.SIGTERM)
-			_ = syscall.Kill(proc.PID, syscall.SIGTERM)
+			_ = terminatePID(proc.PID)
 		}
 		_ = name
 	}
@@ -31,8 +28,7 @@ func StopProjectProcesses(st *state.ProjectState) {
 
 	for _, proc := range st.Processes {
 		if proc.PID > 0 && state.IsProcessAlive(proc.PID) {
-			_ = syscall.Kill(-proc.PID, syscall.SIGKILL)
-			_ = syscall.Kill(proc.PID, syscall.SIGKILL)
+			_ = killPID(proc.PID)
 		}
 	}
 

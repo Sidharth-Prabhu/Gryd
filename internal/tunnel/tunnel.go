@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"regexp"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -108,7 +107,7 @@ func (m *Manager) StartTunnel(ctx context.Context, serviceName string, port int,
 	}
 
 	// Process group isolation
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	setSysProcAttr(cmd)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -147,7 +146,7 @@ func (m *Manager) StartTunnel(ctx context.Context, serviceName string, port int,
 	case u := <-urlChan:
 		publicURL = u
 	case <-time.After(12 * time.Second):
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		killCmd(cmd)
 		cancel()
 		return nil, fmt.Errorf("timeout waiting for %s to generate public tunnel URL", provider)
 	}
@@ -181,9 +180,9 @@ func (m *Manager) StopTunnel(serviceName string) error {
 
 	tun.cancel()
 	if tun.Cmd != nil && tun.Cmd.Process != nil {
-		_ = syscall.Kill(-tun.Cmd.Process.Pid, syscall.SIGTERM)
+		terminateCmd(tun.Cmd)
 		time.Sleep(100 * time.Millisecond)
-		_ = syscall.Kill(-tun.Cmd.Process.Pid, syscall.SIGKILL)
+		killCmd(tun.Cmd)
 	}
 
 	return nil

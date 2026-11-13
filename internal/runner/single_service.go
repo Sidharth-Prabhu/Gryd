@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/loom-cli/gryd/internal/config"
@@ -33,10 +32,10 @@ func RestartSingleService(projectName, serviceName string) error {
 	// 1. Kill old process if running
 	if oldProc, ok := projectState.Processes[serviceName]; ok && oldProc.PID > 0 {
 		if state.IsProcessAlive(oldProc.PID) {
-			_ = syscall.Kill(-oldProc.PID, syscall.SIGTERM)
+			_ = terminatePID(oldProc.PID)
 			time.Sleep(150 * time.Millisecond)
 			if state.IsProcessAlive(oldProc.PID) {
-				_ = syscall.Kill(-oldProc.PID, syscall.SIGKILL)
+				_ = killPID(oldProc.PID)
 			}
 		}
 	}

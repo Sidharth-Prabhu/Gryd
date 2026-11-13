@@ -6,7 +6,6 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -56,19 +55,17 @@ func FreePort(port int) ([]int, error) {
 		return nil, nil
 	}
 
-	// Try SIGTERM first
+	// Try graceful termination first
 	for _, pid := range pids {
-		_ = syscall.Kill(-pid, syscall.SIGTERM)
-		_ = syscall.Kill(pid, syscall.SIGTERM)
+		_ = terminatePID(pid)
 	}
 
 	time.Sleep(300 * time.Millisecond)
 
-	// Follow up with SIGKILL if still holding the port
+	// Follow up with SIGKILL/force kill if still holding the port
 	remainingPids := FindPIDsListeningOnPort(port)
 	for _, pid := range remainingPids {
-		_ = syscall.Kill(-pid, syscall.SIGKILL)
-		_ = syscall.Kill(pid, syscall.SIGKILL)
+		_ = killPID(pid)
 	}
 
 	return pids, nil

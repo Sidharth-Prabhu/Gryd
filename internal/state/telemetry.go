@@ -2,7 +2,6 @@ package state
 
 import (
 	"fmt"
-	"syscall"
 
 	"github.com/shirou/gopsutil/v3/process"
 )
@@ -37,9 +36,9 @@ func GetProcessTelemetry(pid int) (*ProcessTelemetry, error) {
 		return nil, err
 	}
 
-	// Verify process is actually alive via signal 0
-	if err := syscall.Kill(pid, 0); err != nil {
-		return nil, fmt.Errorf("process %d is not running: %w", pid, err)
+	// Verify process is actually alive
+	if !IsProcessAlive(pid) {
+		return nil, fmt.Errorf("process %d is not running", pid)
 	}
 
 	cpuPercent, _ := p.CPUPercent()
