@@ -33,6 +33,7 @@ single terminal command.`,
 
 // Execute runs the root CLI command.
 func Execute() error {
+	CheckUpdatePrompt()
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprint(os.Stderr, FormatGrydError(err))
 		return err
@@ -64,4 +65,5 @@ func init() {
 	rootCmd.AddCommand(logsCmd)
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(updateCmd)
 }
