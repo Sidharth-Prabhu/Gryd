@@ -95,9 +95,9 @@ func CheckForUpdateCached() (string, bool) {
 		_ = json.Unmarshal(data, &cache)
 	}
 
-	// If cache is older than checkInterval, refresh in background
+	// If cache is older than checkInterval, refresh in background (or synchronously if cache is empty)
 	if time.Since(cache.LastChecked) > checkInterval {
-		go func() {
+		refresh := func() {
 			rel, err := FetchLatestRelease(requestTimeout)
 			if err == nil && rel.TagName != "" {
 				newCache := versionCache{
@@ -109,7 +109,22 @@ func CheckForUpdateCached() (string, bool) {
 					_ = os.WriteFile(cachePath, b, 0644)
 				}
 			}
-		}()
+		}
+
+		if cache.LatestVersion == "" {
+			// First run: fetch with a quick 1.5s timeout so the user sees the notice immediately
+			rel, err := FetchLatestRelease(1500 * time.Millisecond)
+			if err == nil && rel.TagName != "" {
+				cache.LatestVersion = rel.TagName
+				cache.LastChecked = time.Now()
+				cache.ReleaseURL = rel.HTMLURL
+				if b, err := json.Marshal(cache); err == nil {
+					_ = os.WriteFile(cachePath, b, 0644)
+				}
+			}
+		} else {
+			go refresh()
+		}
 	}
 
 	// Compare current Version with cached latest version
