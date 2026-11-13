@@ -3,6 +3,7 @@
 [![Go Version](https://img.shields.io/badge/go-%3E%3D1.21-00ADD8.svg?style=flat&logo=go)](https://golang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](https://github.com/Sidharth-Prabhu/gryd)
+[![Docker](https://img.shields.io/badge/docker-ghcr.io%2Fsidharth--prabhu%2Fgryd-2496ED.svg?logo=docker)](https://github.com/Sidharth-Prabhu/gryd/pkgs/container/gryd)
 [![Homebrew](https://img.shields.io/badge/homebrew-Sidharth--Prabhu%2Ftap-orange.svg)](https://github.com/Sidharth-Prabhu/homebrew-tap)
 [![WinGet](https://img.shields.io/badge/winget-SidharthPrabhu.Gryd-blue.svg)](https://github.com/microsoft/winget-pkgs)
 
@@ -59,6 +60,25 @@ winget install gryd
 ```powershell
 winget install SidharthPrabhu.Gryd
 ```
+
+### Docker (macOS, Windows & Linux)
+
+Gryd is published as a multi-architecture container (`linux/amd64` and `linux/arm64`) on GitHub Container Registry (GHCR):
+
+```bash
+# Pull the latest image
+docker pull ghcr.io/sidharth-prabhu/gryd:latest
+
+# Run interactive TUI mounting your current directory
+docker run -it --rm \
+  -v "$(pwd)":/workspace \
+  -p 8000:8000 \
+  -p 3000:3000 \
+  ghcr.io/sidharth-prabhu/gryd:latest run
+```
+
+*(On Windows PowerShell, use `-v "${PWD}:/workspace"`)*
+
 
 ### Pre-Built Binaries
 
