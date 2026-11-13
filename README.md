@@ -2,9 +2,11 @@
 
 [![Go Version](https://img.shields.io/badge/go-%3E%3D1.21-00ADD8.svg?style=flat&logo=go)](https://golang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/Sidharth-Prabhu/Gryd)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](https://github.com/Sidharth-Prabhu/gryd)
+[![Homebrew](https://img.shields.io/badge/homebrew-Sidharth--Prabhu%2Ftap-orange.svg)](https://github.com/Sidharth-Prabhu/homebrew-tap)
+[![WinGet](https://img.shields.io/badge/winget-SidharthPrabhu.Gryd-blue.svg)](https://github.com/microsoft/winget-pkgs)
 
-**Gryd** is a high-performance, developer-first command-line orchestrator and terminal user interface (TUI) for local multi-service development environments.
+**Gryd** is a cross-platform, developer-first command-line orchestrator and interactive terminal user interface (TUI) for local multi-service development environments.
 
 Instead of juggling 5+ terminal tabs for your API backend, frontend, worker queues, MCP servers, and databases—or wrestling with heavy container overhead—Gryd allows developers to configure, launch, monitor, test, tunnel, and manage all services with a single command.
 
@@ -13,7 +15,8 @@ Instead of juggling 5+ terminal tabs for your API backend, frontend, worker queu
 ## ⚡ Highlights
 
 - **🖥️ Responsive Full-Screen TUI**: Live multi-pane terminal interface powered by Bubble Tea & Lip Gloss, featuring Catppuccin-themed status badges, service navigation, and live scrollable log viewing.
-- **🛡️ Process Group Isolation & Port Freeing**: Uses native Unix process groups (`pgid`). Stopping services terminates all child processes (`node`, `python`, `uvicorn`, `go`) without leaving orphaned port listeners (`EADDRINUSE`).
+- **🌍 Native Cross-Platform**: Full first-class support for **macOS** (Apple Silicon & Intel), **Linux** (AMD64 & ARM64), and **Windows** (AMD64 & ARM64).
+- **🛡️ Process Group Isolation & Port Freeing**: Uses native Unix process groups (`pgid`) and Windows taskkill process tree termination. Stopping services guarantees all child processes (`node`, `python`, `uvicorn`, `go`) are terminated without leaving orphaned port listeners (`EADDRINUSE`).
 - **🔍 In-TUI Log Search & Regex Filtering (`/`)**: Real-time log searching with automatic fallback from regex to substring search and keyword highlighting.
 - **🏷️ Log Level Cycling (`l`) & Color Differentiation**: Instantly filter logs by level (`ERROR`, `WARN`, `INFO`) with color-coded syntax highlighting across the TUI and CLI.
 - **📑 Structured JSON Log Parser (`J`)**: Auto-detects structured JSON logs (Zap, Zerolog, Pino) with toggleable viewing modes (`compact` single-line, `pretty` multiline, or `raw`).
@@ -23,31 +26,91 @@ Instead of juggling 5+ terminal tabs for your API backend, frontend, worker queu
 - **👁️ Built-in File Watcher (`watch` / `ignore`)**: Declarative hot-reload rules per service with 300ms debouncing—no external tools like `nodemon` or `air` required.
 - **🔄 Hot Reload (`r`) vs. Hard Restart (`R`)**: Graceful code reload (`r`) keeps container sidecars running, while hard restart (`R`) completely cleans processes, frees ports, and restarts fresh.
 - **🔀 Multi-Environment Profiles (`--profile` / `-p`)**: Run customized subsets of services and dependencies with cascading `.env` file support (`.env`, `.env.local`, `.env.<profile>`).
-- **🔌 Remote Unix Socket IPC Daemon**: Control running services from another terminal tab (`gryd service restart <svc>`, `gryd service stop <svc>`, `gryd service exec <svc> -- <cmd>`).
+- **🔌 Remote Unix Socket / Named Pipe IPC Daemon**: Control running services from another terminal tab (`gryd service restart <svc>`, `gryd service stop <svc>`, `gryd service exec <svc> -- <cmd>`).
 - **🧪 Pre-Flight Boot Verification (`gryd test`)**: Automated integration test boot that verifies port readiness, safely terminates all child processes, and outputs standard CI exit codes or machine-readable JSON (`--json`).
 - **🌿 Integrated Version Control (`gryd vc`)**: Full-screen Git branch selector with live search, push workflows, and branch merging.
+- **🚀 Built-in Auto-Update System**: Automatically checks GitHub releases in the background, notifies you when an update is available, and upgrades with `gryd update`.
 
 ---
 
 ## 📦 Installation
 
+### macOS & Linux (via Homebrew)
+
+The easiest way to install and manage Gryd on macOS and Linux is through Homebrew:
+
+```bash
+# Add the tap
+brew tap Sidharth-Prabhu/tap
+
+# Install gryd
+brew install gryd
+```
+
+### Windows (via WinGet)
+
+Install Gryd on Windows using the official Windows Package Manager:
+
+```powershell
+winget install gryd
+```
+
+*Or by Package Identifier:*
+```powershell
+winget install SidharthPrabhu.Gryd
+```
+
+### Pre-Built Binaries
+
+Download pre-compiled binaries directly from the [GitHub Releases](https://github.com/Sidharth-Prabhu/gryd/releases):
+
+| OS | Architecture | Format |
+|---|---|---|
+| **macOS** | Apple Silicon (`arm64`) | `.tar.gz` |
+| **macOS** | Intel (`amd64`) | `.tar.gz` |
+| **Linux** | 64-bit (`amd64`) | `.tar.gz` |
+| **Linux** | ARM64 (`arm64`) | `.tar.gz` |
+| **Windows** | 64-bit (`amd64`) | `.zip` (with `gryd.exe`) |
+| **Windows** | ARM64 (`arm64`) | `.zip` (with `gryd.exe`) |
+
 ### From Source (Go 1.21+)
 
 ```bash
-git clone https://github.com/Sidharth-Prabhu/Gryd.git
-cd Gryd
-go build -o /usr/local/bin/gryd ./cmd/gryd
-```
-
-### Quick Install (macOS / Linux)
-
-```bash
-go install github.com/loom-cli/gryd/cmd/gryd@latest
+git clone https://github.com/Sidharth-Prabhu/gryd.git
+cd gryd
+go build -o /usr/local/bin/gryd .
 ```
 
 Verify your installation:
 ```bash
 gryd --version
+```
+
+---
+
+## 🔄 Updating Gryd
+
+Gryd includes an integrated update checker that runs silently in the background. Whenever a new version is released on GitHub, Gryd will display a subtle notification:
+
+```
+╭───────────────────────────────────────────────────╮
+│  Update available: v0.2.0 -> v0.3.0               │
+│  Run 'gryd update' to install the latest version. │
+╰───────────────────────────────────────────────────╯
+```
+
+To update directly:
+```bash
+gryd update
+```
+
+Or if installed via a package manager:
+```bash
+# Homebrew
+brew upgrade gryd
+
+# WinGet
+winget upgrade gryd
 ```
 
 ---
@@ -81,13 +144,13 @@ gryd run
 Gryd uses a human-friendly YAML file in your project root:
 
 ```yaml
-name: cleo
+name: my-app
 working_directory: .
 
 services:
   backend:
     directory: api
-    command: uv run relationos-api
+    command: uvicorn main:app --reload --port 8000
     port: 8000
     env:
       ENVIRONMENT: development
@@ -99,268 +162,26 @@ services:
       - "*.log"
       - ".git/**"
 
-  worker:
-    directory: mcp
-    command: uv run python scripts/worker.py
-    depends_on:
-      - backend
-
   frontend:
     directory: web
     command: npm run dev
     port: 3000
     depends_on:
       - backend
+    watch:
+      - "src/**"
+      - "public/**"
 
-# Optional containerized sidecars (PostgreSQL, Redis, RabbitMQ, Ollama, etc.)
-dependencies:
-  postgres:
-    image: postgres:16-alpine
-    ports: ["5432:5432"]
-    env:
-      POSTGRES_DB: app
-      POSTGRES_USER: dev
-      POSTGRES_PASSWORD: password
-    volumes:
-      - ./data/postgres:/var/lib/postgresql/data
-  redis:
-    image: redis:7-alpine
-    ports: ["6379:6379"]
+  worker:
+    directory: workers
+    command: python queue_consumer.py
+    env_file: .env.worker
 
-# Named Environment Profiles
 profiles:
-  minimal:
-    services: ["backend"]
-    dependencies: ["postgres"]
-    env:
-      DEBUG: "true"
-  full-stack:
-    services: ["backend", "worker", "frontend"]
-    dependencies: ["postgres", "redis"]
-    env_file: ".env.fullstack"
-
-settings:
-  health_check: true
-  restart_on_failure: false
-```
-
-### Field Definitions
-
-| Field | Type | Description |
-|---|---|---|
-| `name` | `string` | Unique project identifier. |
-| `working_directory` | `string` | Root folder path (defaults to `.`). |
-| `services.<name>.directory` | `string` | Subdirectory where the service command runs. |
-| `services.<name>.command` | `string` | Shell command executed for the service. |
-| `services.<name>.port` | `int` | *(Optional)* Port used for readiness verification & port freeing. |
-| `services.<name>.depends_on`| `list` | *(Optional)* Prerequisite services or sidecars required before startup. |
-| `services.<name>.env` | `map` | *(Optional)* Environment variables injected into the service process. |
-| `services.<name>.watch` | `list` | *(Optional)* Directories or file globs to watch for hot reloads. |
-| `services.<name>.ignore` | `list` | *(Optional)* File patterns ignored by the file watcher. |
-| `dependencies.<name>.image` | `string` | Container image to run as a sidecar (via Docker or Podman). |
-| `dependencies.<name>.ports` | `list` | Port mappings (`host:container`). |
-| `dependencies.<name>.env` | `map` | Environment variables injected into the container. |
-| `dependencies.<name>.volumes` | `list` | Volume mounts (`host_dir:container_dir`). |
-| `profiles.<name>.services` | `list` | Subset of services to run under this profile. |
-| `profiles.<name>.dependencies` | `list` | Subset of sidecars to run under this profile. |
-| `profiles.<name>.env` | `map` | Environment overrides for this profile. |
-| `profiles.<name>.env_file` | `string` | Path to custom `.env` file for this profile. |
-| `settings.health_check` | `bool` | Verifies whether configured ports are open and listening. |
-| `settings.restart_on_failure` | `bool` | Automatically restarts services that exit with non-zero codes. |
-
----
-
-## 📖 Command Reference
-
-### Global Flags
-- `-c, --config <path>`: Path to configuration file (default is `./gryd.yaml`).
-- `-p, --profile <name>`: Target environment profile defined in `gryd.yaml` (e.g. `minimal`, `full-stack`).
-- `-d, --debug`: Enable verbose/debug logging output.
-- `-h, --help`: Display help and syntax for any command.
-
----
-
-### `gryd run [project]`
-Starts all services defined in `gryd.yaml` concurrently.
-
-```bash
-# Launch default environment with full-screen TUI
-gryd run
-
-# Launch with a specific profile
-gryd run --profile minimal
-
-# Run a specific project from outside its directory
-gryd run my-project
-```
-
----
-
-### `gryd logs [service]`
-View, filter, stream, or export service logs directly from the terminal.
-
-```bash
-# View combined logs for all services
-gryd logs
-
-# Filter logs for a specific service
-gryd logs backend
-
-# Live follow/stream logs (like tail -f)
-gryd logs backend -f
-
-# Show last N lines
-gryd logs backend -n 100
-
-# Export logs to a file
-gryd logs backend -n 500 -o backend.log
-```
-
----
-
-### `gryd tunnel <service>`
-Expose a service's local port to a public HTTPS URL via Cloudflare Tunnels, ngrok, or localtunnel.
-
-```bash
-# Expose backend port with auto-detected provider
-gryd tunnel backend
-
-# Expose using a specific provider
-gryd tunnel web --provider ngrok
-
-# Stop an active tunnel
-gryd tunnel stop backend
-```
-
----
-
-### `gryd service`
-Remotely inspect or control individual services via the background IPC daemon without stopping the whole project.
-
-```bash
-# Run only specific services from configuration
-gryd service run backend worker
-
-# Restart a single service via daemon IPC
-gryd service restart backend
-# (Shortcut: gryd restart backend)
-
-# Stop a single service via daemon IPC
-gryd service stop worker
-# (Shortcut: gryd stop worker)
-
-# Execute a command in a service's directory
-gryd service exec backend -- pnpm test
-```
-
----
-
-### `gryd test [project]`
-Runs an integration boot test, monitors socket listeners, streams live logs, and verifies clean startup and shutdown.
-
-```bash
-# Standard test boot
-gryd test
-
-# Test with a specific profile
-gryd test --profile minimal
-
-# Machine-readable JSON output for CI pipelines
-gryd test --json
-```
-
----
-
-### `gryd status [project]`
-Displays execution status, PIDs, active ports, container sidecars, and uptimes.
-
-```bash
-# Human-friendly card view
-gryd status
-
-# Machine-readable JSON output for CI/CD or scripts
-gryd status --json
-```
-
----
-
-### `gryd ports`
-Scans all project-assigned ports and identifies active listening PIDs and process names.
-
-```bash
-gryd ports
-```
-
----
-
-### `gryd look [project]`
-Attaches to an already-running background project and opens the live interactive TUI dashboard.
-
-```bash
-gryd look
-gryd look my-project
-```
-
----
-
-### `gryd reload [project]`
-Performs a graceful hot reload on running services without destroying state or stopping container sidecars.
-
-```bash
-gryd reload
-```
-
----
-
-### `gryd restart [project]`
-Performs a complete hard restart: terminates all processes and process groups (`SIGTERM` + `SIGKILL`), frees all occupied ports, cleans up state, and boots the project fresh.
-
-```bash
-gryd restart
-```
-
----
-
-### `gryd stop [project]`
-Stops all running services, terminates container sidecars, and frees occupied network ports.
-
-```bash
-gryd stop
-```
-
----
-
-### `gryd list`
-Lists all known projects, their configuration file paths, and current execution states.
-
-```bash
-gryd list
-```
-
----
-
-### `gryd vc` (Version Control)
-Full-screen interactive Git branch selector, conflict resolver, and push manager.
-
-```bash
-# Open interactive Git management dashboard
-gryd vc
-
-# Commit and push all changes with a single command
-gryd vc push -m "feat: new feature"
-
-# Merge another branch safely
-gryd vc merge feature/login
-```
-
----
-
-### `gryd version`
-Prints version, release phase, platform, and Go runtime information.
-
-```bash
-gryd version
-gryd --version
+  api-only:
+    services: [backend]
+  full:
+    services: [backend, frontend, worker]
 ```
 
 ---
@@ -386,6 +207,142 @@ When running in the full-screen dashboard (`gryd run` or `gryd look`):
 
 ---
 
+## 🛠️ CLI Command Reference
+
+### `gryd run [project]`
+Starts all services defined in `gryd.yaml` and launches the full-screen interactive TUI dashboard.
+
+```bash
+# Run with default profile
+gryd run
+
+# Run with a specific profile
+gryd run --profile api-only
+
+# Run in detached (daemon) mode without opening TUI
+gryd run -d
+```
+
+---
+
+### `gryd look [project]`
+Attaches the interactive TUI dashboard to an already running background Gryd daemon session.
+
+```bash
+gryd look
+```
+
+---
+
+### `gryd stop [project]`
+Stops all running services, terminates process trees, and frees all occupied network ports.
+
+```bash
+gryd stop
+```
+
+---
+
+### `gryd restart [project]`
+Performs a complete hard restart: terminates all processes and process groups (`SIGTERM` + `SIGKILL`), frees all occupied ports, cleans up state, and boots the project fresh.
+
+```bash
+gryd restart
+```
+
+---
+
+### `gryd reload [project]`
+Performs a graceful hot reload on running services without destroying state or stopping container sidecars.
+
+```bash
+gryd reload
+```
+
+---
+
+### `gryd test [project]`
+Runs pre-flight validation checks to confirm that all configured services boot, bind to their ports, and terminate cleanly without leaving orphan processes.
+
+```bash
+# Standard test run
+gryd test
+
+# Output machine-readable JSON for CI pipelines
+gryd test --json
+```
+
+---
+
+### `gryd tunnel [service]`
+Establishes a secure, public HTTPS tunnel for a running local service port (powered by Cloudflare Quick Tunnels, ngrok, or localtunnel).
+
+```bash
+gryd tunnel backend
+```
+
+---
+
+### `gryd service [command]`
+Inspect and control individual services running inside an active Gryd session via IPC:
+
+```bash
+# Restart a single service
+gryd service restart backend
+
+# Stop a single service
+gryd service stop worker
+
+# Execute an ad-hoc command within a service context
+gryd service exec backend -- npm run seed
+```
+
+---
+
+### `gryd vc` (Version Control)
+Full-screen interactive Git branch selector, conflict resolver, and push manager.
+
+```bash
+# Open interactive Git management dashboard
+gryd vc
+
+# Commit and push all changes with a single command
+gryd vc push -m "feat: new feature"
+
+# Merge another branch safely
+gryd vc merge feature/login
+```
+
+---
+
+### `gryd update`
+Checks for the latest Gryd release on GitHub, downloads the matching binary for your OS and architecture, replaces the existing binary, and verifies the new version.
+
+```bash
+gryd update
+```
+
+---
+
+### `gryd version`
+Prints version, release tag, platform architecture, and Go runtime information.
+
+```bash
+gryd --version
+```
+
+---
+
+## 🤖 Continuous Integration & Packaging
+
+Gryd includes automated GitHub Actions pipelines ([`.github/workflows/release.yml`](.github/workflows/release.yml)) configured to:
+- Cross-compile native Go binaries for macOS, Linux, and Windows (AMD64 & ARM64).
+- Package tarballs and zip archives with SHA256 checksums.
+- Automatically update and commit the Homebrew Formula in [`Sidharth-Prabhu/homebrew-tap`](https://github.com/Sidharth-Prabhu/homebrew-tap).
+- Automatically generate 1.6.0 portable manifests and submit pull requests to the official Microsoft [`microsoft/winget-pkgs`](https://github.com/microsoft/winget-pkgs) catalog.
+
+---
+
 ## 📄 License
 
-Gryd is licensed under the [MIT License](LICENSE).
+Gryd is open source software licensed under the [MIT License](LICENSE).
